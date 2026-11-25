@@ -1,0 +1,49 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 5001,
+    "generate_path": "/v1/chat/completions"
+  },
+  "paths": {
+    "install_directory": "runtime/koboldcpp",
+    "model_directory": "models",
+    "model_file": "",
+    "executable": "runtime/koboldcpp/koboldcpp.exe"
+  },
+  "startup_parameters": [
+    {
+      "name": "threads",
+      "value": 0
+    },
+    {
+      "name": "gpulayers",
+      "value": -1
+    },
+    {
+      "name": "batchsize",
+      "value": 256
+    },
+    {
+      "name": "ubatchsize",
+      "value": 128
+    },
+    {
+      "name": "quantkv",
+      "value": "q8_0"
+    }
+  ],
+  "request_parameters": {
+    "context_size": 8192,
+    "max_tokens": 1024,
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "top_k": 40,
+    "presence_penalty": 0.0,
+    "frequency_penalty": 0.0,
+    "repetition_penalty": 1.1,
+    "seed": -1,
+    "stop": []
+  },
+  "release_tag": "",
+  "sha256": ""
+}

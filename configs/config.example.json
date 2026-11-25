@@ -1,0 +1,25 @@
+{
+  "api_type": "koboldcpp",
+  "koboldcpp_settings_path": "koboldcpp-settings.json",
+  "role_contracts_path": "role-contracts.json",
+  "agent_harness_path": "agent-harness.json",
+  "project_name": "Ataraxia",
+  "resources_root": "",
+  "resources_user": "default-user",
+  "json_retry_limit": 3,
+  "context_compression": {
+    "enabled": true,
+    "trigger_tokens": 5000,
+    "target_tokens": 512,
+    "role_id": "context_compressor"
+  },
+  "llm_input_format": "json",
+  "json_pretty": true,
+  "json_indent": 2,
+  "interface_language": "Japanese",
+  "gui_theme": "system",
+  "gui": {
+    "recent_sessions_max": 5
+  },
+  "user_output_language": "Japanese"
+}

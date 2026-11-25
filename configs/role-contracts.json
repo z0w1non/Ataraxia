@@ -1,0 +1,1685 @@
+{
+  "schemas": {
+    "agent_core_input": {
+      "type": "object",
+      "required": ["goal", "context", "constraints", "cycle", "latest_stage", "results", "workspace_files", "workspace_media", "available_roles", "user_output_language", "internal_language"],
+      "properties": {
+        "goal": {"type": "string"},
+        "context": {"type": "string"},
+        "constraints": {"type": "array", "items": {"type": "string"}},
+        "cycle": {"type": "integer"},
+        "latest_stage": {"type": "string"},
+        "results": {"type": "object"},
+        "workspace_files": {"type": "array", "items": {"type": "object"}},
+        "workspace_media": {"type": "array", "items": {"type": "object"}},
+        "available_roles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {"id": {"type": "string"}, "purpose": {"type": "string"}},
+            "required": ["id", "purpose"],
+            "additionalProperties": false
+          }
+        },
+        "user_output_language": {"type": "string"},
+        "internal_language": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "agent_core_output": {
+      "type": "object",
+      "required": ["workflow"],
+      "properties": {
+        "workflow": {
+          "type": "object",
+          "required": ["initial_stage", "stages"],
+          "properties": {
+            "initial_stage": {"type": "string"},
+            "stages": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {"type": "string"},
+                  "role_id": {"type": "string"},
+                  "result_key": {"type": "string"},
+                  "next_stages": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+                },
+                "required": ["id", "role_id", "result_key", "next_stages"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_compressor_input": {
+      "type": "object",
+      "required": [
+        "goal",
+        "context",
+        "constraints",
+        "latest_stage",
+        "results",
+        "target_tokens",
+        "user_output_language",
+        "internal_language"
+      ],
+      "properties": {
+        "goal": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "latest_stage": {
+          "type": "string"
+        },
+        "results": {
+          "type": "object"
+        },
+        "target_tokens": {
+          "type": "integer"
+        },
+        "user_output_language": {
+          "type": "string"
+        },
+        "internal_language": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_planner_output": {
+      "type": "object",
+      "properties": {
+        "plan": {
+          "type": "string"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "success_criteria": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "plan",
+        "actions",
+        "success_criteria"
+      ],
+      "additionalProperties": false
+    },
+    "agent_executor_output": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "string"
+        },
+        "file_changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "create",
+                  "modify",
+                  "delete"
+                ]
+              },
+              "base_hash": {
+                "type": "string"
+              },
+              "operations": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "op": {
+                          "type": "string",
+                          "enum": [
+                            "retain"
+                          ]
+                        },
+                        "count": {
+                          "type": "integer"
+                        },
+                        "lines": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "op",
+                        "count",
+                        "lines"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "op": {
+                          "type": "string",
+                          "enum": [
+                            "delete",
+                            "insert"
+                          ]
+                        },
+                        "count": {
+                          "type": "integer"
+                        },
+                        "lines": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "op",
+                        "count",
+                        "lines"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            },
+            "required": [
+              "path",
+              "action",
+              "base_hash",
+              "operations"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "command_id": {
+                "type": "string"
+              },
+              "arguments": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "command_id",
+              "arguments"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "blocked",
+            "partial"
+          ]
+        }
+      },
+      "required": [
+        "result",
+        "file_changes",
+        "commands",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "agent_reviewer_output": {
+      "type": "object",
+      "properties": {
+        "approved": {
+          "type": "boolean"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "next_actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "approved",
+        "findings",
+        "next_actions"
+      ],
+      "additionalProperties": false
+    },
+    "agent_improver_output": {
+      "type": "object",
+      "properties": {
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "next_plan": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "changes",
+        "next_plan"
+      ],
+      "additionalProperties": false
+    },
+    "agent_router_output": {
+      "type": "object",
+      "properties": {
+        "next_stage": {
+          "type": "string"
+        },
+        "rationale": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "next_stage",
+        "rationale"
+      ],
+      "additionalProperties": false
+    },
+    "agent_researcher_output": {
+      "type": "object",
+      "properties": {
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "workspace_sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "open_questions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "findings",
+        "workspace_sources",
+        "open_questions"
+      ],
+      "additionalProperties": false
+    },
+    "agent_verifier_output": {
+      "type": "object",
+      "properties": {
+        "verified": {
+          "type": "boolean"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "verified",
+        "findings",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "agent_security_reviewer_output": {
+      "type": "object",
+      "properties": {
+        "risk_level": {
+          "type": "string",
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "risk_level",
+        "findings",
+        "required_actions"
+      ],
+      "additionalProperties": false
+    },
+    "agent_compressor_output": {
+      "type": "object",
+      "properties": {
+        "compressed_context": {
+          "type": "string"
+        },
+        "retained_facts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "open_items": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "compressed_context",
+        "retained_facts",
+        "open_items"
+      ],
+      "additionalProperties": false
+    },
+    "agent_reporter_output": {
+      "type": "object",
+      "properties": {
+        "heading": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "heading",
+        "body"
+      ],
+      "additionalProperties": false
+    },
+    "session_namer_input": {
+      "type": "object",
+      "properties": {
+        "first_prompt": {
+          "type": "string"
+        },
+        "user_output_language": {
+          "type": "string"
+        },
+        "internal_language": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "first_prompt",
+        "user_output_language",
+        "internal_language"
+      ],
+      "additionalProperties": false
+    },
+    "session_namer_output": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 48
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "agent_planner_input": {
+      "type": "object",
+      "required": [
+        "goal",
+        "context",
+        "constraints",
+        "cycle",
+        "latest_stage",
+        "results",
+        "workspace_files",
+        "context_summary",
+        "user_output_language",
+        "internal_language"
+      ],
+      "properties": {
+        "goal": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cycle": {
+          "type": "integer"
+        },
+        "latest_stage": {
+          "type": "string"
+        },
+        "results": {
+          "type": "object"
+        },
+        "workspace_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "byte_length": {
+                "type": "integer"
+              },
+              "content_available": {
+                "type": "boolean"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "byte_length",
+              "content_available",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "context_summary": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "user_output_language": {
+          "type": "string"
+        },
+        "internal_language": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_executor_input": {
+      "type": "object",
+      "required": [
+        "goal",
+        "context",
+        "constraints",
+        "cycle",
+        "phase",
+        "phase_data",
+        "latest_stage",
+        "results",
+        "workspace_root",
+        "workspace_files",
+        "workspace_media",
+        "allowed_commands",
+        "context_summary",
+        "user_output_language",
+        "internal_language"
+      ],
+      "properties": {
+        "goal": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cycle": {
+          "type": "integer"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "phase_data": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latest_stage": {
+          "type": "string"
+        },
+        "results": {
+          "type": "object"
+        },
+        "workspace_root": {
+          "type": "string"
+        },
+        "workspace_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "byte_length": {
+                "type": "integer"
+              },
+              "content_available": {
+                "type": "boolean"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "byte_length",
+              "content_available",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "workspace_media": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "mime_type": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "byte_length": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "path",
+              "mime_type",
+              "sha256",
+              "byte_length"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "allowed_commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "executable": {
+                "type": "string"
+              },
+              "arguments_regex": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "executable",
+              "arguments_regex"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "context_summary": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "user_output_language": {
+          "type": "string"
+        },
+        "internal_language": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_reviewer_input": {
+      "type": "object",
+      "required": [
+        "goal",
+        "context",
+        "constraints",
+        "cycle",
+        "phase",
+        "phase_data",
+        "latest_stage",
+        "results",
+        "workspace_root",
+        "workspace_files",
+        "workspace_media",
+        "context_summary",
+        "user_output_language",
+        "internal_language"
+      ],
+      "properties": {
+        "goal": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cycle": {
+          "type": "integer"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "phase_data": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latest_stage": {
+          "type": "string"
+        },
+        "results": {
+          "type": "object"
+        },
+        "workspace_root": {
+          "type": "string"
+        },
+        "workspace_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "byte_length": {
+                "type": "integer"
+              },
+              "content_available": {
+                "type": "boolean"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "byte_length",
+              "content_available",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "workspace_media": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "mime_type": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "byte_length": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "path",
+              "mime_type",
+              "sha256",
+              "byte_length"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "context_summary": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "user_output_language": {
+          "type": "string"
+        },
+        "internal_language": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_improver_input": {
+      "type": "object",
+      "required": [
+        "goal",
+        "context",
+        "constraints",
+        "cycle",
+        "phase",
+        "phase_data",
+        "latest_stage",
+        "results",
+        "workspace_files",
+        "context_summary",
+        "user_output_language",
+        "internal_language"
+      ],
+      "properties": {
+        "goal": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cycle": {
+          "type": "integer"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "phase_data": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latest_stage": {
+          "type": "string"
+        },
+        "results": {
+          "type": "object"
+        },
+        "workspace_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "byte_length": {
+                "type": "integer"
+              },
+              "content_available": {
+                "type": "boolean"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "byte_length",
+              "content_available",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "context_summary": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "user_output_language": {
+          "type": "string"
+        },
+        "internal_language": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_router_input": {
+      "type": "object",
+      "required": [
+        "goal",
+        "context",
+        "constraints",
+        "cycle",
+        "phase",
+        "phase_data",
+        "latest_stage",
+        "results",
+        "available_next_stages",
+        "context_summary",
+        "user_output_language",
+        "internal_language"
+      ],
+      "properties": {
+        "goal": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cycle": {
+          "type": "integer"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "phase_data": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latest_stage": {
+          "type": "string"
+        },
+        "results": {
+          "type": "object"
+        },
+        "available_next_stages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "role_id": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "role_id",
+              "purpose"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "context_summary": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "user_output_language": {
+          "type": "string"
+        },
+        "internal_language": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_researcher_input": {
+      "type": "object",
+      "required": [
+        "goal",
+        "context",
+        "constraints",
+        "cycle",
+        "latest_stage",
+        "results",
+        "workspace_root",
+        "workspace_files",
+        "workspace_media",
+        "context_summary",
+        "user_output_language",
+        "internal_language"
+      ],
+      "properties": {
+        "goal": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cycle": {
+          "type": "integer"
+        },
+        "latest_stage": {
+          "type": "string"
+        },
+        "results": {
+          "type": "object"
+        },
+        "workspace_root": {
+          "type": "string"
+        },
+        "workspace_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "byte_length": {
+                "type": "integer"
+              },
+              "content_available": {
+                "type": "boolean"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "byte_length",
+              "content_available",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "workspace_media": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "mime_type": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "byte_length": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "path",
+              "mime_type",
+              "sha256",
+              "byte_length"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "context_summary": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "user_output_language": {
+          "type": "string"
+        },
+        "internal_language": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_verifier_input": {
+      "type": "object",
+      "required": [
+        "goal",
+        "context",
+        "constraints",
+        "cycle",
+        "phase",
+        "phase_data",
+        "latest_stage",
+        "results",
+        "workspace_root",
+        "workspace_files",
+        "workspace_media",
+        "context_summary",
+        "user_output_language",
+        "internal_language"
+      ],
+      "properties": {
+        "goal": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cycle": {
+          "type": "integer"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "phase_data": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latest_stage": {
+          "type": "string"
+        },
+        "results": {
+          "type": "object"
+        },
+        "workspace_root": {
+          "type": "string"
+        },
+        "workspace_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "byte_length": {
+                "type": "integer"
+              },
+              "content_available": {
+                "type": "boolean"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "byte_length",
+              "content_available",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "workspace_media": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "mime_type": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "byte_length": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "path",
+              "mime_type",
+              "sha256",
+              "byte_length"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "context_summary": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "user_output_language": {
+          "type": "string"
+        },
+        "internal_language": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_impact_reviewer_input": {
+      "type": "object",
+      "required": ["goal", "context", "constraints", "cycle", "phase", "phase_data", "latest_stage", "results", "workspace_root", "workspace_files", "context_summary", "user_output_language", "internal_language"],
+      "properties": {
+        "goal": {"type": "string"},
+        "context": {"type": "string"},
+        "constraints": {"type": "array", "items": {"type": "string"}},
+        "cycle": {"type": "integer"},
+        "phase": {"type": "string"},
+        "phase_data": {"anyOf": [{"type": "object"}, {"type": "null"}]},
+        "latest_stage": {"type": "string"},
+        "results": {"type": "object"},
+        "workspace_root": {"type": "string"},
+        "workspace_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {"type": "string"},
+              "sha256": {"type": "string"},
+              "byte_length": {"type": "integer"},
+              "content_available": {"type": "boolean"},
+              "content": {"type": "string"}
+            },
+            "required": ["path", "sha256", "byte_length", "content_available", "content"],
+            "additionalProperties": false
+          }
+        },
+        "context_summary": {"anyOf": [{"type": "object"}, {"type": "null"}]},
+        "user_output_language": {"type": "string"},
+        "internal_language": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "agent_impact_reviewer_output": {
+      "type": "object",
+      "required": ["impact_level", "affected_areas", "findings", "mitigations", "reversible"],
+      "properties": {
+        "impact_level": {"type": "string", "enum": ["low", "medium", "high"]},
+        "affected_areas": {"type": "array", "items": {"type": "string"}},
+        "findings": {"type": "array", "items": {"type": "string"}},
+        "mitigations": {"type": "array", "items": {"type": "string"}},
+        "reversible": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "agent_security_reviewer_input": {
+      "type": "object",
+      "required": [
+        "goal",
+        "context",
+        "constraints",
+        "cycle",
+        "phase",
+        "phase_data",
+        "latest_stage",
+        "results",
+        "workspace_root",
+        "workspace_files",
+        "workspace_media",
+        "context_summary",
+        "user_output_language",
+        "internal_language"
+      ],
+      "properties": {
+        "goal": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cycle": {
+          "type": "integer"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "phase_data": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latest_stage": {
+          "type": "string"
+        },
+        "results": {
+          "type": "object"
+        },
+        "workspace_root": {
+          "type": "string"
+        },
+        "workspace_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "byte_length": {
+                "type": "integer"
+              },
+              "content_available": {
+                "type": "boolean"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "byte_length",
+              "content_available",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "workspace_media": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "mime_type": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "byte_length": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "path",
+              "mime_type",
+              "sha256",
+              "byte_length"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "context_summary": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "user_output_language": {
+          "type": "string"
+        },
+        "internal_language": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_reporter_input": {
+      "type": "object",
+      "required": [
+        "goal",
+        "phase",
+        "latest_stage",
+        "results",
+        "user_output_language",
+        "internal_language"
+      ],
+      "properties": {
+        "goal": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "latest_stage": {
+          "type": "string"
+        },
+        "results": {
+          "type": "object"
+        },
+        "user_output_language": {
+          "type": "string"
+        },
+        "internal_language": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "generic_agent": {
+    "roles": [
+      {
+        "id": "core",
+        "system_prompt": "agent_core",
+        "purpose": "Design a task-specific workflow by selecting and ordering available specialist roles based on the user's goal and workspace.",
+        "input_schema_ref": "agent_core_input",
+        "output_schema_ref": "agent_core_output",
+        "message_structure": {"roles": ["system", "user"]}
+      },
+      {
+        "id": "planner",
+        "system_prompt": "agent_planner",
+        "purpose": "Translate the task goal, constraints, workspace evidence, and prior results into ordered actions and measurable success criteria; do not design workflow stages or choose roles.",
+        "input_schema_ref": "agent_planner_input",
+        "output_schema_ref": "agent_planner_output",
+        "message_structure": {
+          "roles": [
+            "system",
+            "user"
+          ]
+        }
+      },
+      {
+        "id": "executor",
+        "system_prompt": "agent_executor",
+        "purpose": "Implement approved work through validated file diffs and allowlisted commands.",
+        "input_schema_ref": "agent_executor_input",
+        "output_schema_ref": "agent_executor_output",
+        "message_structure": {
+          "roles": [
+            "system",
+            "user"
+          ]
+        }
+      },
+      {
+        "id": "reviewer",
+        "system_prompt": "agent_reviewer",
+        "purpose": "Inspect changed workspace files and command results against the completion criteria.",
+        "input_schema_ref": "agent_reviewer_input",
+        "output_schema_ref": "agent_reviewer_output",
+        "message_structure": {
+          "roles": [
+            "system",
+            "user"
+          ]
+        }
+      },
+      {
+        "id": "improver",
+        "system_prompt": "agent_improver",
+        "purpose": "Address review findings and prepare the next execution cycle.",
+        "input_schema_ref": "agent_improver_input",
+        "output_schema_ref": "agent_improver_output",
+        "message_structure": {
+          "roles": [
+            "system",
+            "user"
+          ]
+        }
+      },
+      {
+        "id": "router",
+        "system_prompt": "agent_router",
+        "purpose": "Choose the next eligible workflow stage from current evidence and completion criteria.",
+        "input_schema_ref": "agent_router_input",
+        "output_schema_ref": "agent_router_output",
+        "message_structure": {
+          "roles": [
+            "system",
+            "user"
+          ]
+        }
+      },
+      {
+        "id": "researcher",
+        "system_prompt": "agent_researcher",
+        "purpose": "Inspect the assigned workspace and gather traceable evidence relevant to the task.",
+        "input_schema_ref": "agent_researcher_input",
+        "output_schema_ref": "agent_researcher_output",
+        "message_structure": {
+          "roles": [
+            "system",
+            "user"
+          ]
+        }
+      },
+      {
+        "id": "verifier",
+        "system_prompt": "agent_verifier",
+        "purpose": "Verify requested outcomes against explicit criteria and available evidence.",
+        "input_schema_ref": "agent_verifier_input",
+        "output_schema_ref": "agent_verifier_output",
+        "message_structure": {
+          "roles": [
+            "system",
+            "user"
+          ]
+        }
+      },
+      {
+        "id": "security_reviewer",
+        "system_prompt": "agent_security_reviewer",
+        "purpose": "Review proposed changes for concrete security and data-boundary risks.",
+        "input_schema_ref": "agent_security_reviewer_input",
+        "output_schema_ref": "agent_security_reviewer_output",
+        "message_structure": {
+          "roles": [
+            "system",
+            "user"
+          ]
+        }
+      },
+      {
+        "id": "impact_reviewer",
+        "system_prompt": "agent_impact_reviewer",
+        "purpose": "Assess likely compatibility, data, dependency, and user-visible effects of a proposed task before implementation, and suggest proportionate mitigations.",
+        "input_schema_ref": "agent_impact_reviewer_input",
+        "output_schema_ref": "agent_impact_reviewer_output",
+        "message_structure": {"roles": ["system", "user"]}
+      },
+      {
+        "id": "context_compressor",
+        "system_prompt": "context_compressor",
+        "purpose": "Compress accumulated task context while preserving decisions, constraints, evidence, open items, and the latest phase result.",
+        "input_schema_ref": "agent_compressor_input",
+        "output_schema_ref": "agent_compressor_output",
+        "message_structure": {
+          "roles": [
+            "system",
+            "user"
+          ]
+        }
+      },
+      {
+        "id": "reporter",
+        "system_prompt": "reporter",
+        "purpose": "Present a concise user-facing heading and body for a completed role outcome.",
+        "input_schema_ref": "agent_reporter_input",
+        "output_schema_ref": "agent_reporter_output",
+        "message_structure": {
+          "roles": [
+            "system",
+            "user"
+          ]
+        }
+      },
+      {
+        "id": "session_namer",
+        "system_prompt": "session_namer",
+        "purpose": "Name a new session concisely from the user's first prompt in the configured user-facing language.",
+        "input_schema_ref": "session_namer_input",
+        "output_schema_ref": "session_namer_output",
+        "message_structure": {
+          "roles": [
+            "system",
+            "user"
+          ]
+        }
+      }
+    ]
+  }
+}

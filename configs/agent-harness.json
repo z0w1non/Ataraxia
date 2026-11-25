@@ -1,0 +1,30 @@
+{
+  "workspace": {
+    "max_file_bytes": 8192,
+    "max_total_bytes": 16384,
+    "max_media_bytes": 262144,
+    "max_total_media_bytes": 524288,
+    "media_extensions": [".png", ".jpg", ".jpeg", ".webp", ".wav", ".mp3"],
+    "ignored_directories": [".git", ".svn"]
+  },
+  "allowed_commands": [
+    {
+      "id": "git_status",
+      "executable": "git",
+      "arguments_regex": "^status(?: --short)?$",
+      "timeout_seconds": 30
+    },
+    {
+      "id": "git_diff_check",
+      "executable": "git",
+      "arguments_regex": "^diff --check$",
+      "timeout_seconds": 30
+    },
+    {
+      "id": "run_project_tests",
+      "executable": "pwsh",
+      "arguments_regex": "^-NoProfile -File tests/run_tests\\.ps1$",
+      "timeout_seconds": 600
+    }
+  ]
+}

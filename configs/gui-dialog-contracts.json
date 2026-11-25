@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "contract_id": "ataraxia.dialog.v1",
+  "kinds": {
+    "message": {
+      "inputs": ["title", "message", "icon", "primary_label"],
+      "outputs": [],
+      "default_icon": "dialog-info",
+      "actions": ["ok"]
+    },
+    "confirm": {
+      "inputs": ["title", "message", "icon", "primary_label", "secondary_label"],
+      "outputs": ["confirmed"],
+      "default_icon": "dialog-question",
+      "actions": ["primary", "secondary", "close"]
+    },
+    "input": {
+      "inputs": ["title", "message", "value", "icon"],
+      "outputs": ["value", "cancelled"],
+      "default_icon": "dialog-input",
+      "actions": ["confirm", "cancel", "close"]
+    },
+    "multiline": {
+      "inputs": ["title", "message", "value", "icon"],
+      "outputs": ["value", "cancelled"],
+      "default_icon": "dialog-text",
+      "actions": ["confirm", "cancel", "close"]
+    },
+    "file_picker": {
+      "inputs": ["title", "initial_directory", "patterns"],
+      "outputs": ["path", "cancelled"],
+      "default_icon": "dialog-file",
+      "actions": ["open", "cancel", "navigate"]
+    },
+    "folder_picker": {
+      "inputs": ["title", "initial_directory"],
+      "outputs": ["path", "cancelled"],
+      "default_icon": "dialog-folder",
+      "actions": ["select", "cancel", "navigate"]
+    }
+  }
+}
