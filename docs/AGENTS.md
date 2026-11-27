@@ -1,36 +1,8 @@
-# Agent development instructions
+# 文書作成時の補足ルール
 
-## Product requirements
+リポジトリ共通のエージェント開発規則は、ルートの [`AGENTS.md`](../AGENTS.md) を参照する。
 
-- Ataraxia is a local agent for work across domains. Do not bake a specific discipline, output artifact, or workflow into the common runner.
-- Express task-specific behavior in structured goals, constraints, roles, schemas, and workflow stages.
-- Tasks may add, change, or remove their own roles and transitions.
-- Treat backward compatibility as optional unless the request explicitly requires it.
-
-## Development process
-
-- Use テスト駆動開発 (TDD). Add or update a failing test before implementation; run the full suite after changes.
-- Keep PowerShell scripts in `scripts/`, shared configuration in `configs/`, language definitions in `locales/`, and user task data in `projects/`.
-- Keep the common execution engine in `AgentCore.ps1` and workspace safety operations in `AgentHarness.ps1`.
-- Do not add external PowerShell modules or local servers when the platform provides the needed capability.
-- Update `README.md` and `docs/SPECIFICATION.md` for changes to architecture, roles, workflows, configuration, dependencies, or file formats.
-
-## Safety and data boundaries
-
-- Apply model-proposed diffs only inside the task's configured `working_directory`, after validating relative paths, base hashes, and all operations.
-- Execute commands only through the preconfigured regular expressions in `configs/agent-harness.json`.
-- Do not inspect or reproduce task content from `projects/` unless required to implement the request. Keep user data out of tests and documentation.
-- Keep external programs, models, and user files separate from the Ataraxia source tree and license notices.
-
-## Test commands
-
-```powershell
-pwsh -File .\tests\run_tests.ps1
-```
-
-## Task examples
-
-```powershell
-pwsh -File .\scripts\Invoke-Agent.ps1 -New sample-task
-pwsh -File .\scripts\Invoke-Agent.ps1 -Run .\projects\Ataraxia\sample-task.task.json -Step -1
-```
+- ルートの `README.md` だけは英語での記述を許容する。それ以外の資料は日本語で作成・管理する。
+- Markdown資料では、見出し、説明文、表の列名、注記を日本語にする。コード識別子、ファイル名、設定キー、API名、標準的な技術用語、引用する外部名称は原表記を保ってよい。
+- 資料の変更では、要求の正本である `REQUIREMENTS.md`、製品仕様である `SPECIFICATION.md`、設計・知見資料の責務を混同しない。ユーザーの明示指示なしに要求の意味や状態を変更しない。
+- 他資料から参照する項目には、ルートの `AGENTS.md` で定めた安定ID規則を適用する。

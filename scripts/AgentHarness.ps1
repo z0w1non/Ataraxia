@@ -1,13 +1,17 @@
 ﻿Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'StructuredData.ps1')
 . (Join-Path $PSScriptRoot 'WorkspaceDiff.ps1')
+. (Join-Path $PSScriptRoot 'WorkspaceReaderPort.ps1')
+. (Join-Path $PSScriptRoot 'WorkspaceFileStorePort.ps1')
+. (Join-Path $PSScriptRoot 'JsonFileStore.ps1')
+. (Join-Path $PSScriptRoot 'ProcessRunnerPort.ps1')
 
-function Import-AgentHarnessSettings([object]$Config, [string]$ConfigPath = '') {
+function Import-AgentHarnessSettings([object]$Config, [string]$ConfigPath = '',[object]$Dependencies=$null) {
     $configuredPath = if ($null -ne $Config.PSObject.Properties['agent_harness_path'] -and -not [string]::IsNullOrWhiteSpace([string]$Config.agent_harness_path)) { [string]$Config.agent_harness_path } else { 'agent-harness.json' }
     $baseDirectory = if ([IO.Path]::IsPathRooted($configuredPath)) { '' } elseif ([string]::IsNullOrWhiteSpace($ConfigPath)) { Join-Path (Split-Path -Parent $PSScriptRoot) 'configs' } else { Split-Path -Parent ([IO.Path]::GetFullPath($ConfigPath)) }
     $path = if ([IO.Path]::IsPathRooted($configuredPath)) { [IO.Path]::GetFullPath($configuredPath) } else { [IO.Path]::GetFullPath((Join-Path $baseDirectory $configuredPath)) }
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Agent harness settings file does not exist: $path" }
-    try { $settings = Read-AgentJsonFile $path } catch { throw "Agent harness settings JSON is invalid: $path. $($_.Exception.Message)" }
+    if (-not (Test-AtaraxiaJsonStoreFile $path $Dependencies)) { throw "Agent harness settings file does not exist: $path" }
+    try { $settings = Read-AtaraxiaJsonStoreFile $path $Dependencies } catch { throw "Agent harness settings JSON is invalid: $path. $($_.Exception.Message)" }
     foreach ($key in @('max_file_bytes','max_total_bytes')) {
         if ($null -eq $settings.workspace.PSObject.Properties[$key] -or [long]$settings.workspace.$key -lt 1) { throw "Agent harness workspace.$key must be positive: $path" }
     }
@@ -31,13 +35,14 @@ function Import-AgentHarnessSettings([object]$Config, [string]$ConfigPath = '') 
     return $settings
 }
 
-function Resolve-AgentWorkspaceDirectory([string]$ConfiguredDirectory, [string]$TaskDirectory) {
+function Resolve-AgentWorkspaceDirectory([string]$ConfiguredDirectory, [string]$TaskDirectory,[object]$Dependencies=(New-AgentWorkspaceFileSystemDependencies)) {
     if ([string]::IsNullOrWhiteSpace($ConfiguredDirectory)) { throw 'Task working_directory is required before execution.' }
     $candidate = if ([IO.Path]::IsPathRooted($ConfiguredDirectory)) { $ConfiguredDirectory } else { Join-Path $TaskDirectory $ConfiguredDirectory }
-    $resolved = (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
-    if (-not (Test-Path -LiteralPath $resolved -PathType Container)) { throw "Task working_directory is not a directory: $resolved" }
-    $rootItem = Get-Item -LiteralPath $resolved -Force
-    if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Task working_directory cannot be a symbolic link or reparse point.' }
+    $pathDependencies=$Dependencies.path_dependencies
+    $resolved = Resolve-AgentWorkspaceExistingPath $pathDependencies $candidate
+    if (-not (Test-AgentWorkspacePath $pathDependencies $resolved 'Container')) { throw "Task working_directory is not a directory: $resolved" }
+    $rootItem = Get-AgentWorkspacePathInfo $pathDependencies $resolved
+    if ($rootItem.is_reparse_point) { throw 'Task working_directory cannot be a symbolic link or reparse point.' }
     return [IO.Path]::GetFullPath($resolved)
 }
 
@@ -48,51 +53,57 @@ function Get-AgentWorkspaceHash([string]$Text) {
     finally { $sha.Dispose() }
 }
 
-function Read-AgentWorkspaceText([string]$Path) {
-    $bytes = [IO.File]::ReadAllBytes($Path)
-    $encoding = [Text.UTF8Encoding]::new($false, $true)
-    $text = $encoding.GetString($bytes)
-    if ($text.Length -gt 0 -and $text[0] -eq [char]0xFEFF) { $text = $text.Substring(1) }
+function ConvertFrom-AgentWorkspaceBytes([byte[]]$Bytes) {
+    $text=[Text.UTF8Encoding]::new($false,$true).GetString($Bytes)
+    if($text.Length -gt 0 -and $text[0] -eq [char]0xFEFF){$text=$text.Substring(1)}
     return $text
 }
 
-function Get-AgentWorkspaceSnapshot([string]$WorkspaceDirectory, [object]$Settings) {
-    $root = [IO.Path]::GetFullPath($WorkspaceDirectory)
+function Read-AgentWorkspaceText([string]$Path,[object]$Dependencies=(New-AgentWorkspaceFileSystemDependencies)) {
+    $bytes=Read-AgentWorkspaceBytes $Dependencies $Path
+    return ConvertFrom-AgentWorkspaceBytes $bytes
+}
+
+function Get-AgentWorkspaceFileEntries([string]$WorkspaceDirectory,[object]$Settings,[object]$Dependencies) {
+    $root=[IO.Path]::GetFullPath($WorkspaceDirectory)
+    $workspaceSettings=$Settings.workspace
+    $ignored=if($null -ne $workspaceSettings.PSObject.Properties['ignored_directories']){@($workspaceSettings.ignored_directories|ForEach-Object{[string]$_})}else{@('.git','.svn')}
+    $directories=[System.Collections.Generic.Stack[string]]::new();$directories.Push($root);$files=[System.Collections.Generic.List[object]]::new()
+    while($directories.Count -gt 0){$directory=$directories.Pop();foreach($entry in (Get-AgentWorkspaceDirectoryEntries $Dependencies $directory)){if($entry.is_reparse_point){continue};if($entry.is_directory){if($ignored -notcontains $entry.name){$directories.Push($entry.full_path)};continue};$files.Add($entry)}}
+    return @($files|Sort-Object full_path)
+}
+
+function Get-AgentWorkspaceSnapshot([string]$WorkspaceDirectory, [object]$Settings, [object]$Dependencies=(New-AgentWorkspaceFileSystemDependencies),[object[]]$FileEntries=$null) {
+    $root = [IO.Path]::GetFullPath($WorkspaceDirectory).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)
     $maxFileBytes = [long]$Settings.workspace.max_file_bytes
     $maxTotalBytes = [long]$Settings.workspace.max_total_bytes
     $ignored = @($Settings.workspace.ignored_directories | ForEach-Object { [string]$_ })
     $files = [System.Collections.Generic.List[object]]::new()
-    $directories = [System.Collections.Generic.Stack[string]]::new()
-    $directories.Push($root)
+    $fileEntries=if($null -eq $FileEntries){Get-AgentWorkspaceFileEntries $root $Settings $Dependencies}else{@($FileEntries)}
     $includedBytes = [long]0
-    while ($directories.Count -gt 0) {
-        $directory = $directories.Pop()
-        foreach ($item in (Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop | Sort-Object FullName)) {
-            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
-            if ($item.PSIsContainer) {
-                if ($ignored -notcontains $item.Name) { $directories.Push($item.FullName) }
-                continue
-            }
-            $rootPrefix = $root.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
-            $relativePath = $item.FullName.Substring($rootPrefix.Length).Replace('\','/')
-            try{$null=Resolve-AgentWorkspacePath $root $relativePath}catch{continue}
+    foreach($item in $fileEntries){
+            $rootPrefix=$root.TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)+'\'
+            if(-not $item.full_path.StartsWith($rootPrefix,[StringComparison]::OrdinalIgnoreCase)){continue}
+            $relativePath = $item.full_path.Substring($rootPrefix.Length).Replace('\','/')
+            try{$null=Resolve-AgentWorkspacePath $root $relativePath $Dependencies.path_dependencies}catch{continue}
             $available = $false
             $content = ''
-            if ($item.Length -le $maxFileBytes -and $includedBytes + $item.Length -le $maxTotalBytes) {
+            if ($item.length -le $maxFileBytes -and $includedBytes + $item.length -le $maxTotalBytes) {
                 try {
-                    $content = Read-AgentWorkspaceText $item.FullName
+                    $bytes=Read-AgentWorkspaceBytes $Dependencies $item.full_path
+                    $content = (New-Object Text.UTF8Encoding($false,$true)).GetString($bytes)
+                    if ($content.Length -gt 0 -and $content[0] -eq [char]0xFEFF) { $content = $content.Substring(1) }
                     $available = ($content.IndexOf([char]0) -lt 0)
-                    if ($available) { $includedBytes += [long]$item.Length } else { $content = '' }
+                    if ($available) { $includedBytes += [long]$item.length } else { $content = '' }
                 } catch [System.Text.DecoderFallbackException] { $content = '' }
             }
-            $fileHash = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            $files.Add([pscustomobject][ordered]@{ path=$relativePath; sha256=$fileHash; byte_length=[long]$item.Length; content_available=$available; content=$content })
-        }
+            $fileHash = Get-AgentWorkspaceFileHash $Dependencies $item.full_path
+            $files.Add([pscustomobject][ordered]@{ path=$relativePath; sha256=$fileHash; byte_length=[long]$item.length; content_available=$available; content=$content })
     }
     return @($files | Sort-Object path)
 }
 
-function Get-AgentWorkspaceMedia([string]$WorkspaceDirectory, [object]$Settings) {
+function Get-AgentWorkspaceMedia([string]$WorkspaceDirectory, [object]$Settings, [object]$Dependencies=(New-AgentWorkspaceFileSystemDependencies),[object[]]$FileEntries=$null) {
     $workspaceSettings = $Settings.workspace
     $maxFileBytes = if ($null -ne $workspaceSettings.PSObject.Properties['max_media_bytes']) { [long]$workspaceSettings.max_media_bytes } else { 2097152 }
     $maxTotalBytes = if ($null -ne $workspaceSettings.PSObject.Properties['max_total_media_bytes']) { [long]$workspaceSettings.max_total_media_bytes } else { 8388608 }
@@ -100,26 +111,32 @@ function Get-AgentWorkspaceMedia([string]$WorkspaceDirectory, [object]$Settings)
     $ignoredDirectories = if ($null -ne $workspaceSettings.PSObject.Properties['ignored_directories']) { @($workspaceSettings.ignored_directories | ForEach-Object { [string]$_ }) } else { @('.git','.svn') }
     $mimeTypes = @{ '.png'='image/png'; '.jpg'='image/jpeg'; '.jpeg'='image/jpeg'; '.webp'='image/webp'; '.wav'='audio/wav'; '.mp3'='audio/mpeg' }
     $root = [IO.Path]::GetFullPath($WorkspaceDirectory)
-    $rootPrefix = $root.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
     $media = [System.Collections.Generic.List[object]]::new()
     $totalBytes = [long]0
     $imageCount = 0
     $audioCount = 0
-    foreach ($item in (Get-ChildItem -LiteralPath $root -File -Recurse -Force -ErrorAction Stop | Sort-Object FullName)) {
-        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
-        $extension = $item.Extension.ToLowerInvariant()
+    $mediaFiles=if($null -eq $FileEntries){Get-AgentWorkspaceFileEntries $root $Settings $Dependencies}else{@($FileEntries)}
+    foreach ($item in @($mediaFiles | Sort-Object full_path)) {
+        $extension = $item.extension.ToLowerInvariant()
         if ($extensions -notcontains $extension -or -not $mimeTypes.ContainsKey($extension)) { continue }
-        $relativePath = $item.FullName.Substring($rootPrefix.Length).Replace('\','/')
-        try{$null=Resolve-AgentWorkspacePath $root $relativePath}catch{continue}
+        $rootPrefix=$root.TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)+'\'
+        if(-not $item.full_path.StartsWith($rootPrefix,[StringComparison]::OrdinalIgnoreCase)){continue}
+        $relativePath = $item.full_path.Substring($rootPrefix.Length).Replace('\','/')
+        try{$null=Resolve-AgentWorkspacePath $root $relativePath $Dependencies.path_dependencies}catch{continue}
         if (@($relativePath -split '/' | Where-Object { $ignoredDirectories -contains $_ }).Count -gt 0) { continue }
-        if ($item.Length -gt $maxFileBytes -or $totalBytes + $item.Length -gt $maxTotalBytes) { continue }
+        if ($item.length -gt $maxFileBytes -or $totalBytes + $item.length -gt $maxTotalBytes) { continue }
         if ($mimeTypes[$extension].StartsWith('image/')) { if ($imageCount -ge 64) { continue }; $imageCount++ }
         else { if ($audioCount -ge 64) { continue }; $audioCount++ }
-        $bytes = [IO.File]::ReadAllBytes($item.FullName)
-        $media.Add([pscustomobject][ordered]@{ path=$relativePath; mime_type=$mimeTypes[$extension]; sha256=(Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); byte_length=[long]$bytes.Length; data_base64=[Convert]::ToBase64String($bytes) })
+        $bytes = Read-AgentWorkspaceBytes $Dependencies $item.full_path
+        $media.Add([pscustomobject][ordered]@{ path=$relativePath; mime_type=$mimeTypes[$extension]; sha256=(Get-AgentWorkspaceFileHash $Dependencies $item.full_path); byte_length=[long]$bytes.Length; data_base64=[Convert]::ToBase64String($bytes) })
         $totalBytes += [long]$bytes.Length
     }
     return @($media)
+}
+
+function Get-AgentWorkspaceContext([string]$WorkspaceDirectory,[object]$Settings,[object]$Dependencies=(New-AgentWorkspaceFileSystemDependencies)) {
+    $entries=Get-AgentWorkspaceFileEntries $WorkspaceDirectory $Settings $Dependencies
+    return [pscustomobject][ordered]@{files=(Get-AgentWorkspaceSnapshot $WorkspaceDirectory $Settings $Dependencies $entries);media=(Get-AgentWorkspaceMedia $WorkspaceDirectory $Settings $Dependencies $entries)}
 }
 
 function ConvertTo-AgentMessageContent([string]$Text, [object[]]$Media = @()) {
@@ -137,7 +154,7 @@ function ConvertTo-AgentMessageContent([string]$Text, [object[]]$Media = @()) {
     return ,@($parts)
 }
 
-function Resolve-AgentWorkspacePath([string]$WorkspaceDirectory, [string]$RelativePath) {
+function Resolve-AgentWorkspacePath([string]$WorkspaceDirectory, [string]$RelativePath,[object]$PathDependencies=(New-AgentWorkspaceFileSystemDependencies).path_dependencies) {
     if ([string]::IsNullOrWhiteSpace($RelativePath) -or [IO.Path]::IsPathRooted($RelativePath) -or $RelativePath -match '[\x00-\x1F\x7F<>:"|?*]' -or $RelativePath -match '(^|[\\/])\.\.?([\\/]|$)') { throw "Workspace path must be a safe relative path: $RelativePath" }
     foreach($segment in ($RelativePath -split '[\\/]')){if([string]::IsNullOrWhiteSpace($segment) -or $segment.EndsWith('.') -or $segment.EndsWith(' ') -or $segment -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$'){throw "Workspace path contains an invalid or reserved segment: $RelativePath"}}
     $root = [IO.Path]::GetFullPath($WorkspaceDirectory).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
@@ -148,14 +165,14 @@ function Resolve-AgentWorkspacePath([string]$WorkspaceDirectory, [string]$Relati
     $segments = $RelativePath -split '[\\/]'
     for ($index = 0; $index -lt ($segments.Count - 1); $index++) {
         $cursor = Join-Path $cursor $segments[$index]
-        if (Test-Path -LiteralPath $cursor) {
-            $item = Get-Item -LiteralPath $cursor -Force
-            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or -not $item.PSIsContainer) { throw "Workspace path traverses a link or non-directory: $RelativePath" }
+        if (Test-AgentWorkspacePath $PathDependencies $cursor 'Any') {
+            $item = Get-AgentWorkspacePathInfo $PathDependencies $cursor
+            if ($item.is_reparse_point -or -not $item.is_directory) { throw "Workspace path traverses a link or non-directory: $RelativePath" }
         }
     }
-    if (Test-Path -LiteralPath $target) {
-        $targetItem = Get-Item -LiteralPath $target -Force
-        if (($targetItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $targetItem.PSIsContainer) { throw "Workspace target must be a regular file: $RelativePath" }
+    if (Test-AgentWorkspacePath $PathDependencies $target 'Any') {
+        $targetItem = Get-AgentWorkspacePathInfo $PathDependencies $target
+        if ($targetItem.is_reparse_point -or $targetItem.is_directory) { throw "Workspace target must be a regular file: $RelativePath" }
     }
     return $target
 }
@@ -191,18 +208,18 @@ function Convert-AgentOperationsToText([string]$Before, [object[]]$Operations) {
     return $outputLines -join "`r`n"
 }
 
-function Write-AgentWorkspaceText([string]$Path, [string]$Text) {
+function Write-AgentWorkspaceAtomicText([string]$Path, [string]$Text,[object]$Dependencies) {
     $parent = Split-Path -Parent $Path
-    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    Ensure-AgentWorkspaceStoreDirectory $Dependencies $parent
     $temporary = "$Path.agent-$([guid]::NewGuid().ToString('N')).tmp"
     $backup = "$Path.agent-$([guid]::NewGuid().ToString('N')).bak"
-    [IO.File]::WriteAllText($temporary, $Text, [Text.UTF8Encoding]::new($false))
+    Write-AgentWorkspaceStoreBytes $Dependencies $temporary ([Text.UTF8Encoding]::new($false).GetBytes($Text))
     try {
-        if (Test-Path -LiteralPath $Path -PathType Leaf) { [IO.File]::Replace($temporary, $Path, $backup) }
-        else { [IO.File]::Move($temporary, $Path) }
+        if (Test-AgentWorkspaceStoreFile $Dependencies $Path) { Replace-AgentWorkspaceStoreFile $Dependencies $temporary $Path $backup }
+        else { Move-AgentWorkspaceStoreFile $Dependencies $temporary $Path }
     } finally {
-        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
-        if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force }
+        if (Test-AgentWorkspaceStoreFile $Dependencies $temporary) { Remove-AgentWorkspaceStoreFile $Dependencies $temporary }
+        if (Test-AgentWorkspaceStoreFile $Dependencies $backup) { Remove-AgentWorkspaceStoreFile $Dependencies $backup }
     }
 }
 
@@ -212,46 +229,46 @@ function Get-AgentByteHash([byte[]]$Bytes) {
     finally { $sha.Dispose() }
 }
 
-function Save-AgentChangeJournal([string]$Path,[object]$Journal) {
+function Save-AgentChangeJournal([string]$Path,[object]$Journal,[object]$Dependencies) {
     $temporaryPath="$Path.tmp"
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
+    Ensure-AgentWorkspaceStoreDirectory $Dependencies (Split-Path -Parent $Path)
     $json=$Journal | ConvertTo-Json -Depth 50
     if([Text.Encoding]::UTF8.GetByteCount($json) -gt 8388608){throw 'Run change journal exceeds the 8 MiB safety limit.'}
-    [IO.File]::WriteAllText($temporaryPath,$json,[Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
+    Write-AgentWorkspaceStoreBytes $Dependencies $temporaryPath ([Text.UTF8Encoding]::new($false).GetBytes($json))
+    Move-AgentWorkspaceStoreFile $Dependencies $temporaryPath $Path -Force
 }
 
-function New-AgentChangeJournal([string]$JournalPath,[string]$WorkspaceDirectory,[string]$StatePath) {
-    if(Test-Path -LiteralPath $JournalPath){throw 'An uncommitted run journal already exists; restore or resolve it before starting another run.'}
-    $stateExists=Test-Path -LiteralPath $StatePath -PathType Leaf
-    if($stateExists -and (Get-Item -LiteralPath $StatePath -Force).Length -gt 2097152){throw 'Task state exceeds the 2 MiB safety limit.'}
-    $stateBytes=if($stateExists){[IO.File]::ReadAllBytes($StatePath)}else{[byte[]]@()}
+function New-AgentChangeJournal([string]$JournalPath,[string]$WorkspaceDirectory,[string]$StatePath,[object]$Dependencies) {
+    if(Test-AgentWorkspaceStoreFile $Dependencies $JournalPath){throw 'An uncommitted run journal already exists; restore or resolve it before starting another run.'}
+    $stateExists=Test-AgentWorkspaceStoreFile $Dependencies $StatePath
+    if($stateExists -and (Get-AgentWorkspaceStoreLength $Dependencies $StatePath) -gt 2097152){throw 'Task state exceeds the 2 MiB safety limit.'}
+    $stateBytes=if($stateExists){Read-AgentWorkspaceStoreBytes $Dependencies $StatePath}else{,[byte[]]@()}
     $journal=[pscustomobject][ordered]@{
         schema_version=1;status='active';workspace_root=[IO.Path]::GetFullPath($WorkspaceDirectory)
         state_before_exists=$stateExists;state_before_base64=[Convert]::ToBase64String($stateBytes);state_before_hash=if($stateExists){Get-AgentByteHash $stateBytes}else{''}
         state_after_exists=$stateExists;state_after_hash=if($stateExists){Get-AgentByteHash $stateBytes}else{''};entries=@()
     }
-    Save-AgentChangeJournal $JournalPath $journal
+    Save-AgentChangeJournal $JournalPath $journal $Dependencies
     return $journal
 }
 
-function Update-AgentChangeJournalState([string]$JournalPath,[string]$StateText) {
-    if(-not(Test-Path -LiteralPath $JournalPath -PathType Leaf)){return}
+function Update-AgentChangeJournalState([string]$JournalPath,[string]$StateText,[object]$Dependencies) {
+    if(-not(Test-AgentWorkspaceStoreFile $Dependencies $JournalPath)){return}
     $journal=Read-AgentJsonFile $JournalPath 8388608
     $stateBytes=[Text.UTF8Encoding]::new($false).GetBytes($StateText)
     $journal.state_after_exists=$true;$journal.state_after_hash=Get-AgentByteHash $stateBytes
-    Save-AgentChangeJournal $JournalPath $journal
+    Save-AgentChangeJournal $JournalPath $journal $Dependencies
 }
 
-function Add-AgentChangeJournalEntries([string]$JournalPath,[string]$WorkspaceDirectory,[object[]]$Plan) {
+function Add-AgentChangeJournalEntries([string]$JournalPath,[string]$WorkspaceDirectory,[object[]]$Plan,[object]$Dependencies) {
     if([string]::IsNullOrWhiteSpace($JournalPath)){return}
     $journal=Read-AgentJsonFile $JournalPath 8388608
     foreach($item in $Plan){
         $entry=@($journal.entries|Where-Object{[string]$_.path -ieq [string]$item.path}|Select-Object -First 1)
-        $afterBytes=if($item.action -eq 'delete'){[byte[]]@()}else{[Text.UTF8Encoding]::new($false).GetBytes([string]$item.content)}
+        $afterBytes=if($item.action -eq 'delete'){,[byte[]]@()}else{[Text.UTF8Encoding]::new($false).GetBytes([string]$item.content)}
         if($entry.Count -eq 0){
-            $beforeExists=Test-Path -LiteralPath $item.full_path -PathType Leaf
-            $beforeBytes=if($beforeExists){,[IO.File]::ReadAllBytes($item.full_path)}else{,[byte[]]@()}
+            $beforeExists=Test-AgentWorkspaceStoreFile $Dependencies $item.full_path
+            $beforeBytes=if($beforeExists){Read-AgentWorkspaceStoreBytes $Dependencies $item.full_path}else{,[byte[]]@()}
             $entry=[pscustomobject][ordered]@{path=[string]$item.path;before_exists=$beforeExists;before_base64=[Convert]::ToBase64String($beforeBytes);before_hash=if($beforeExists){Get-AgentByteHash $beforeBytes}else{''};after_exists=($item.action -ne 'delete');after_hash=if($item.action -eq 'delete'){''}else{Get-AgentByteHash $afterBytes}}
             $journal.entries=@($journal.entries)+@($entry)
         } else {
@@ -259,43 +276,45 @@ function Add-AgentChangeJournalEntries([string]$JournalPath,[string]$WorkspaceDi
             $entry[0].after_hash=if($item.action -eq 'delete'){''}else{Get-AgentByteHash $afterBytes}
         }
     }
-    Save-AgentChangeJournal $JournalPath $journal
+    Save-AgentChangeJournal $JournalPath $journal $Dependencies
 }
 
-function Sync-AgentChangeJournal([string]$JournalPath,[string]$WorkspaceDirectory) {
-    if(-not(Test-Path -LiteralPath $JournalPath -PathType Leaf)){return}
+function Sync-AgentChangeJournal([string]$JournalPath,[string]$WorkspaceDirectory,[object]$Dependencies) {
+    if(-not(Test-AgentWorkspaceStoreFile $Dependencies $JournalPath)){return}
     $journal=Read-AgentJsonFile $JournalPath 8388608
     foreach($entry in @($journal.entries)){
-        $target=Resolve-AgentWorkspacePath $WorkspaceDirectory ([string]$entry.path)
-        $exists=Test-Path -LiteralPath $target -PathType Leaf
+        $pathDependencies=if($null -ne $Dependencies.PSObject.Properties['path_dependencies'] -and $null -ne $Dependencies.path_dependencies){$Dependencies.path_dependencies}else{(New-AgentWorkspaceFileSystemDependencies).path_dependencies}
+        $target=Resolve-AgentWorkspacePath $WorkspaceDirectory ([string]$entry.path) $pathDependencies
+        $exists=Test-AgentWorkspaceStoreFile $Dependencies $target
         $entry.after_exists=$exists
-        $entry.after_hash=if($exists){Get-AgentByteHash ([IO.File]::ReadAllBytes($target))}else{''}
+        $entry.after_hash=if($exists){Get-AgentByteHash (Read-AgentWorkspaceStoreBytes $Dependencies $target)}else{''}
     }
-    Save-AgentChangeJournal $JournalPath $journal
+    Save-AgentChangeJournal $JournalPath $journal $Dependencies
 }
 
-function Write-AgentWorkspaceBytes([string]$Path,[byte[]]$Bytes) {
-    $parent=Split-Path -Parent $Path;New-Item -ItemType Directory -Force -Path $parent|Out-Null
+function Write-AgentWorkspaceBytes([string]$Path,[byte[]]$Bytes,[object]$Dependencies) {
+    $parent=Split-Path -Parent $Path;Ensure-AgentWorkspaceStoreDirectory $Dependencies $parent
     $temporary="$Path.rollback-$([guid]::NewGuid().ToString('N')).tmp"
-    [IO.File]::WriteAllBytes($temporary,$Bytes)
-    Move-Item -LiteralPath $temporary -Destination $Path -Force
+    Write-AgentWorkspaceStoreBytes $Dependencies $temporary $Bytes
+    Move-AgentWorkspaceStoreFile $Dependencies $temporary $Path -Force
 }
 
-function Restore-AgentRunChanges([string]$WorkspaceDirectory,[string]$JournalPath,[string]$StatePath) {
-    if(-not(Test-Path -LiteralPath $JournalPath -PathType Leaf)){return [pscustomobject]@{restored_files=@();state_restored=$false}}
+function Restore-AgentRunChanges([string]$WorkspaceDirectory,[string]$JournalPath,[string]$StatePath,[object]$Dependencies) {
+    if(-not(Test-AgentWorkspaceStoreFile $Dependencies $JournalPath)){return [pscustomobject]@{restored_files=@();state_restored=$false}}
     $journal=Read-AgentJsonFile $JournalPath 8388608
     $workspace=[IO.Path]::GetFullPath($WorkspaceDirectory)
     if($journal.status -ne 'active' -or [IO.Path]::GetFullPath([string]$journal.workspace_root) -ine $workspace){throw 'Run journal does not match the assigned workspace.'}
-    $stateExists=Test-Path -LiteralPath $StatePath -PathType Leaf
-    $stateHash=if($stateExists){Get-AgentByteHash ([IO.File]::ReadAllBytes($StatePath))}else{''}
+    $stateExists=Test-AgentWorkspaceStoreFile $Dependencies $StatePath
+    $stateHash=if($stateExists){Get-AgentByteHash (Read-AgentWorkspaceStoreBytes $Dependencies $StatePath)}else{''}
     $stateBeforeMatches=($stateExists -eq [bool]$journal.state_before_exists) -and (-not $stateExists -or $stateHash -ceq [string]$journal.state_before_hash)
     $stateAfterMatches=($stateExists -eq [bool]$journal.state_after_exists) -and (-not $stateExists -or $stateHash -ceq [string]$journal.state_after_hash)
     if(-not $stateBeforeMatches -and -not $stateAfterMatches){throw 'Task state changed outside the active run; rollback was stopped to protect it.'}
     $restorePlan=[System.Collections.Generic.List[object]]::new()
     foreach($entry in @($journal.entries)){
-        $target=Resolve-AgentWorkspacePath $workspace ([string]$entry.path)
-        $exists=Test-Path -LiteralPath $target -PathType Leaf
-        $currentHash=if($exists){Get-AgentByteHash ([IO.File]::ReadAllBytes($target))}else{''}
+        $pathDependencies=if($null -ne $Dependencies.PSObject.Properties['path_dependencies'] -and $null -ne $Dependencies.path_dependencies){$Dependencies.path_dependencies}else{(New-AgentWorkspaceFileSystemDependencies).path_dependencies}
+        $target=Resolve-AgentWorkspacePath $workspace ([string]$entry.path) $pathDependencies
+        $exists=Test-AgentWorkspaceStoreFile $Dependencies $target
+        $currentHash=if($exists){Get-AgentByteHash (Read-AgentWorkspaceStoreBytes $Dependencies $target)}else{''}
         $beforeMatches=($exists -eq [bool]$entry.before_exists) -and (-not $exists -or $currentHash -ceq [string]$entry.before_hash)
         $afterMatches=($exists -eq [bool]$entry.after_exists) -and (-not $exists -or $currentHash -ceq [string]$entry.after_hash)
         if(-not $beforeMatches -and -not $afterMatches){throw "Workspace file changed outside the active run; rollback was stopped: $($entry.path)"}
@@ -304,37 +323,39 @@ function Restore-AgentRunChanges([string]$WorkspaceDirectory,[string]$JournalPat
     for($index=$restorePlan.Count-1;$index -ge 0;$index--){
         $item=$restorePlan[$index]
         if($item.already_restored){continue}
-        if($item.before_exists){Write-AgentWorkspaceBytes $item.target $item.before_bytes}
-        elseif(Test-Path -LiteralPath $item.target -PathType Leaf){Remove-Item -LiteralPath $item.target -Force}
+        if($item.before_exists){Write-AgentWorkspaceBytes $item.target $item.before_bytes $Dependencies}
+        elseif(Test-AgentWorkspaceStoreFile $Dependencies $item.target){Remove-AgentWorkspaceStoreFile $Dependencies $item.target}
     }
     if(-not $stateBeforeMatches){
-        if([bool]$journal.state_before_exists){Write-AgentWorkspaceBytes $StatePath ([Convert]::FromBase64String([string]$journal.state_before_base64))}
-        elseif(Test-Path -LiteralPath $StatePath -PathType Leaf){Remove-Item -LiteralPath $StatePath -Force}
+        if([bool]$journal.state_before_exists){Write-AgentWorkspaceBytes $StatePath ([Convert]::FromBase64String([string]$journal.state_before_base64)) $Dependencies}
+        elseif(Test-AgentWorkspaceStoreFile $Dependencies $StatePath){Remove-AgentWorkspaceStoreFile $Dependencies $StatePath}
     }
-    Remove-Item -LiteralPath $JournalPath -Force
+    Remove-AgentWorkspaceStoreFile $Dependencies $JournalPath
     return [pscustomobject]@{restored_files=@($restorePlan|Where-Object{-not $_.already_restored}|ForEach-Object{$_.path});state_restored=(-not $stateBeforeMatches)}
 }
 
-function Apply-AgentWorkspaceChanges([string]$WorkspaceDirectory, [object[]]$Changes,[string]$JournalPath='') {
+function Apply-AgentWorkspaceChanges([string]$WorkspaceDirectory, [object[]]$Changes,[string]$JournalPath='',[object]$Dependencies) {
     if(@($Changes).Count -gt 100){throw 'A role may change at most 100 files in one stage.'}
     $plan = [System.Collections.Generic.List[object]]::new()
     $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($change in $Changes) {
         $relative = [string]$change.path
-        $target = Resolve-AgentWorkspacePath $WorkspaceDirectory $relative
+        $pathDependencies=if($null -ne $Dependencies.PSObject.Properties['path_dependencies'] -and $null -ne $Dependencies.path_dependencies){$Dependencies.path_dependencies}else{(New-AgentWorkspaceFileSystemDependencies).path_dependencies}
+        $target = Resolve-AgentWorkspacePath $WorkspaceDirectory $relative $pathDependencies
         if (-not $seen.Add($target)) { throw "Workspace change contains a duplicate path: $relative" }
         $action = [string]$change.action
         if ($action -notin @('create','modify','delete')) { throw "Unsupported workspace change action: $action" }
         if([string]$change.base_hash -notmatch '^[0-9a-fA-F]{64}$'){throw "Workspace change has an invalid base hash: $relative"}
-        $exists = Test-Path -LiteralPath $target -PathType Leaf
-        if ($exists -and (Get-Item -LiteralPath $target -Force).Length -gt 1048576){throw "Workspace file exceeds the 1 MiB change safety limit: $relative"}
+        $exists = Test-AgentWorkspaceStoreFile $Dependencies $target
+        if ($exists -and (Get-AgentWorkspaceStoreLength $Dependencies $target) -gt 1048576){throw "Workspace file exceeds the 1 MiB change safety limit: $relative"}
         if ($action -eq 'create' -and $exists) { throw "Workspace create target already exists: $relative" }
         if ($action -in @('modify','delete') -and -not $exists) { throw "Workspace change target does not exist: $relative" }
-        $before = if ($exists -and $action -ne 'delete') { Read-AgentWorkspaceText $target } else { '' }
-        if ($exists -and $action -ne 'delete' -and (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() -cne [string]$change.base_hash) { throw "Workspace base hash does not match: $relative" }
+        $beforeBytes=if($exists -and $action -ne 'delete'){Read-AgentWorkspaceStoreBytes $Dependencies $target}else{,[byte[]]@()}
+        $before=if($exists -and $action -ne 'delete'){ConvertFrom-AgentWorkspaceBytes $beforeBytes}else{''}
+        if ($exists -and $action -ne 'delete' -and (Get-AgentByteHash $beforeBytes) -cne [string]$change.base_hash) { throw "Workspace base hash does not match: $relative" }
         if ($action -eq 'create' -and (Get-AgentWorkspaceHash '') -cne [string]$change.base_hash) { throw "Workspace create base hash is invalid: $relative" }
         if ($action -eq 'delete') {
-            if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() -cne [string]$change.base_hash) { throw "Workspace delete base hash does not match: $relative" }
+            if ((Get-AgentByteHash (Read-AgentWorkspaceStoreBytes $Dependencies $target)) -cne [string]$change.base_hash) { throw "Workspace delete base hash does not match: $relative" }
             $after = $null
         } else {
             if(@($change.operations).Count -gt 5000){throw "Workspace diff contains too many operations: $relative"}
@@ -345,11 +366,12 @@ function Apply-AgentWorkspaceChanges([string]$WorkspaceDirectory, [object[]]$Cha
         }
         $plan.Add([pscustomobject]@{ path=$relative; full_path=$target; action=$action; content=$after })
     }
-    Add-AgentChangeJournalEntries $JournalPath $WorkspaceDirectory @($plan)
+    Add-AgentChangeJournalEntries $JournalPath $WorkspaceDirectory @($plan) $Dependencies
     foreach ($item in $plan) {
-        if ($item.action -eq 'delete') { Remove-Item -LiteralPath $item.full_path -Force }
-        else { Write-AgentWorkspaceText $item.full_path ([string]$item.content) }
+        if ($item.action -eq 'delete') { Remove-AgentWorkspaceStoreFile $Dependencies $item.full_path }
+        else { Write-AgentWorkspaceAtomicText $item.full_path ([string]$item.content) $Dependencies }
     }
+    Sync-AgentChangeJournal $JournalPath $WorkspaceDirectory $Dependencies
     return [pscustomobject][ordered]@{ changed_files=@($plan | ForEach-Object { [string]$_.path }); change_count=$plan.Count }
 }
 
@@ -386,39 +408,20 @@ function Resolve-AgentAllowedCommand([object]$Settings, [object]$Command) {
     return [pscustomobject]@{ id=[string]$rule.id; executable=[string]$rule.executable; arguments=$arguments; argument_text=$argumentText; timeout_seconds=[int]$rule.timeout_seconds }
 }
 
-function Invoke-AgentAllowedCommand([object]$Settings, [string]$WorkspaceDirectory, [object]$Command) {
+function Invoke-AgentAllowedCommand([object]$Settings, [string]$WorkspaceDirectory, [object]$Command,[object]$Dependencies=$null) {
     $resolved = Resolve-AgentAllowedCommand $Settings $Command
-    $start = [Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = $resolved.executable
-    $start.Arguments = $resolved.argument_text
-    $start.WorkingDirectory = [IO.Path]::GetFullPath($WorkspaceDirectory)
-    $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
-    $process = [Diagnostics.Process]::new()
-    $process.StartInfo = $start
-    $clock = [Diagnostics.Stopwatch]::StartNew()
-    try {
-        if (-not $process.Start()) { throw "Command failed to start: $($resolved.id)" }
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        $timedOut = -not $process.WaitForExit($resolved.timeout_seconds * 1000)
-        if ($timedOut) { $process.Kill(); $process.WaitForExit() }
-        $stdout = $stdoutTask.GetAwaiter().GetResult()
-        $stderr = $stderrTask.GetAwaiter().GetResult()
-        $clock.Stop()
-        $limit = 20000
-        $stdout=[regex]::Replace($stdout,'\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))','') -replace '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]',''
-        $stderr=[regex]::Replace($stderr,'\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))','') -replace '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]',''
-        return [pscustomobject][ordered]@{ command_id=$resolved.id; command="$($resolved.executable) $($resolved.argument_text)".Trim(); exit_code=if ($timedOut) { -1 } else { [int]$process.ExitCode }; timed_out=$timedOut; duration_ms=[long]$clock.ElapsedMilliseconds; stdout=if ($stdout.Length -gt $limit) { $stdout.Substring(0,$limit) } else { $stdout }; stderr=if ($stderr.Length -gt $limit) { $stderr.Substring(0,$limit) } else { $stderr } }
-    } finally { $process.Dispose() }
+    $workspace=[IO.Path]::GetFullPath($WorkspaceDirectory)
+    $raw=Invoke-AgentProcessRunner $Dependencies $resolved $workspace
+    $limit=20000
+    $stdout=[regex]::Replace([string]$raw.stdout,'\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))','') -replace '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]',''
+    $stderr=[regex]::Replace([string]$raw.stderr,'\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))','') -replace '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]',''
+    return [pscustomobject][ordered]@{ command_id=$resolved.id; command="$($resolved.executable) $($resolved.argument_text)".Trim(); exit_code=[int]$raw.exit_code; timed_out=[bool]$raw.timed_out; duration_ms=[long]$raw.duration_ms; stdout=if ($stdout.Length -gt $limit) { $stdout.Substring(0,$limit) } else { $stdout }; stderr=if ($stderr.Length -gt $limit) { $stderr.Substring(0,$limit) } else { $stderr.Substring(0,[Math]::Min($stderr.Length,$limit)) } }
 }
 
-function Invoke-AgentCommandBatch([object]$Settings, [string]$WorkspaceDirectory, [object[]]$Commands) {
+function Invoke-AgentCommandBatch([object]$Settings, [string]$WorkspaceDirectory, [object[]]$Commands,[object]$Dependencies=$null) {
     if(@($Commands).Count -gt 64){throw 'A role may run at most 64 allowlisted commands in one stage.'}
     $resolvedCommands = @($Commands | ForEach-Object { Resolve-AgentAllowedCommand $Settings $_ })
     $results = @()
-    foreach ($command in $Commands) { $results += Invoke-AgentAllowedCommand $Settings $WorkspaceDirectory $command }
+    foreach ($command in $Commands) { $results += Invoke-AgentAllowedCommand $Settings $WorkspaceDirectory $command $Dependencies }
     return $results
 }

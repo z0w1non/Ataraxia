@@ -1,17 +1,29 @@
 ﻿Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'StructuredData.ps1')
+. (Join-Path $PSScriptRoot 'JsonFileStore.ps1')
+. (Join-Path $PSScriptRoot 'GuiModelParameters.ps1')
+. (Join-Path $PSScriptRoot 'ModelParameterPresets.ps1')
 
 function Get-KoboldCppSettingsPath([object]$Config, [string]$ConfigPath) {
     $configuredPath = if ($null -ne $Config.PSObject.Properties['koboldcpp_settings_path'] -and -not [string]::IsNullOrWhiteSpace([string]$Config.koboldcpp_settings_path)) { [string]$Config.koboldcpp_settings_path } else { 'koboldcpp-settings.json' }
-    if ([IO.Path]::IsPathRooted($configuredPath)) { return [IO.Path]::GetFullPath($configuredPath) }
+    if ([IO.Path]::IsPathRooted($configuredPath)) { $resolved=[IO.Path]::GetFullPath($configuredPath);Register-AgentJsonRepairKind $resolved 'kobold_settings';return $resolved }
     $baseDirectory = if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) { Split-Path -Parent ([IO.Path]::GetFullPath($ConfigPath)) } else { Join-Path (Split-Path -Parent $PSScriptRoot) 'configs' }
-    return [IO.Path]::GetFullPath((Join-Path $baseDirectory $configuredPath))
+    $resolved=[IO.Path]::GetFullPath((Join-Path $baseDirectory $configuredPath));Register-AgentJsonRepairKind $resolved 'kobold_settings';return $resolved
 }
 
 function Resolve-KoboldCppBuild([ValidateSet('auto','cuda','nocuda','oldpc')][string]$Build,[string[]]$VideoControllerNames=@()) {
     if($Build -ne 'auto'){return $Build}
     if(@($VideoControllerNames|Where-Object{[string]$_ -match '(?i)NVIDIA|GeForce|Quadro|Tesla'}).Count -gt 0){return 'cuda'}
     return 'nocuda'
+}
+
+function Get-KoboldCppBuildSelection([ValidateSet('auto','cuda','nocuda','oldpc')][string]$RequestedBuild,[scriptblock]$ReadVideoControllerNames) {
+    $names=@();$detection_succeeded=$true
+    if($RequestedBuild -eq 'auto'){
+        if($ReadVideoControllerNames -isnot [scriptblock]){throw 'Automatic KoboldCpp build selection requires a hardware information adapter.'}
+        try{$names=@(& $ReadVideoControllerNames|ForEach-Object{[string]$_})}catch{$detection_succeeded=$false;$names=@()}
+    }
+    return [pscustomobject][ordered]@{requested_build=$RequestedBuild;build=(Resolve-KoboldCppBuild $RequestedBuild $names);video_controller_names=[string[]]$names;detection_succeeded=[bool]$detection_succeeded}
 }
 
 function New-LegacyKoboldCppSettings([object]$Config) {
@@ -28,23 +40,28 @@ function New-LegacyKoboldCppSettings([object]$Config) {
     }
 }
 
-function Import-KoboldCppSettings([object]$Config, [string]$ConfigPath) {
+function Import-KoboldCppSettings([object]$Config, [string]$ConfigPath,[object]$Dependencies=$null) {
     $settingsPath = Get-KoboldCppSettingsPath $Config $ConfigPath
-    if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
-        $settings = Read-AgentJsonFile $settingsPath
+    if (Test-AtaraxiaJsonStoreFile $settingsPath $Dependencies) {
+        $settings = Read-AtaraxiaJsonStoreFile $settingsPath $Dependencies
     } else {
         $settings = New-LegacyKoboldCppSettings $Config
     }
     if ($null -eq $settings.server -or $null -eq $settings.paths -or $null -eq $settings.request_parameters -or $null -eq $settings.startup_parameters) { throw "KoboldCpp settings are incomplete: $settingsPath" }
+    $catalogPath=Join-Path (Split-Path -Parent $PSScriptRoot) 'configs/model-parameter-presets.json'
+    $catalog=Read-AtaraxiaJsonStoreFile $catalogPath $Dependencies
+    $presetPath=Get-AtaraxiaUserModelParameterPresetPath
+    $hasPresetData=Test-AtaraxiaJsonStoreFile $presetPath $Dependencies
+    $presetData=if($hasPresetData){Read-AtaraxiaJsonStoreFile $presetPath $Dependencies}else{$null}
+    Initialize-AtaraxiaModelParameterPresetCatalog $settings @($catalog.presets) $presetData|Out-Null
+    if(-not $hasPresetData){Save-AtaraxiaUserModelParameterPresetData $presetPath $settings $Dependencies|Out-Null}
     $server = [string]$settings.server.host
     $port = [int]$settings.server.port
     if ([string]::IsNullOrWhiteSpace($server) -or $port -lt 1 -or $port -gt 65535 -or [uri]::CheckHostName($server) -eq [UriHostNameType]::Unknown) { throw "KoboldCpp server host or port is invalid: $settingsPath" }
     try{$null=New-AgentHttpUri "http://${server}:$port" ([string]$settings.server.generate_path)}catch{throw "KoboldCpp server endpoint is invalid: $settingsPath. $($_.Exception.Message)"}
     $contextSize = Get-StructuredProperty $settings.request_parameters 'context_size'
     if (-not $contextSize.exists -or [int]$contextSize.value -lt 1) { throw "KoboldCpp request_parameters.context_size must be positive: $settingsPath" }
-    $modelPath = [string]$settings.paths.model_file
-    if (-not [string]::IsNullOrWhiteSpace($modelPath) -and -not [IO.Path]::IsPathRooted($modelPath)) { $modelPath = Join-Path (Split-Path -Parent $PSScriptRoot) (Join-Path ([string]$settings.paths.model_directory) $modelPath) }
-    $effectiveSettings = Get-KoboldCppModelSettings $settings $modelPath
+    $effectiveSettings = Get-KoboldCppEffectiveSettings $settings
     $Config | Add-Member -NotePropertyName api_server -NotePropertyValue "http://${server}:$port" -Force
     $Config | Add-Member -NotePropertyName generate_path -NotePropertyValue ([string]$settings.server.generate_path) -Force
     $Config | Add-Member -NotePropertyName override -NotePropertyValue $effectiveSettings.request_parameters -Force
@@ -55,42 +72,9 @@ function Import-KoboldCppSettings([object]$Config, [string]$ConfigPath) {
     return $settings
 }
 
-function Get-KoboldCppModelSettings([object]$Settings, [string]$ModelPath) {
+function Get-KoboldCppEffectiveSettings([object]$Settings) {
     $json = $Settings | ConvertTo-Json -Depth 60
-    $effective = $json | ConvertFrom-Json
-    if ([string]::IsNullOrWhiteSpace($ModelPath)) { return $effective }
-    $sidecarPath = [IO.Path]::ChangeExtension($ModelPath, '.json')
-    if (-not (Test-Path -LiteralPath $sidecarPath -PathType Leaf)) { return $effective }
-    try { $sidecar = Read-AgentJsonFile $sidecarPath } catch { throw "Model sidecar JSON is invalid: $sidecarPath. $($_.Exception.Message)" }
-    if ($sidecar -isnot [System.Management.Automation.PSCustomObject]) { throw "Model sidecar must be a JSON object: $sidecarPath" }
-    $allowedRootKeys = @('startup_parameters','request_parameters')
-    foreach ($property in $sidecar.PSObject.Properties) { if ($allowedRootKeys -notcontains $property.Name) { throw "Unsupported model sidecar property '$($property.Name)': $sidecarPath" } }
-    if ($null -ne $sidecar.PSObject.Properties['startup_parameters']) {
-        if ($sidecar.startup_parameters -is [string]) { throw "Model sidecar startup_parameters must be an array: $sidecarPath" }
-        $seenNames = @()
-        foreach ($override in @($sidecar.startup_parameters)) {
-            if ($override -isnot [System.Management.Automation.PSCustomObject] -or $null -eq $override.PSObject.Properties['name'] -or $null -eq $override.PSObject.Properties['value']) { throw "Each model startup override requires name and value: $sidecarPath" }
-            $name = [string]$override.name
-            if ($name -notmatch '^[A-Za-z][A-Za-z0-9_-]*$' -or $name -in @('model','port','contextsize')) { throw "Invalid or reserved model startup parameter '$name': $sidecarPath" }
-            if ($seenNames -contains $name) { throw "Duplicate model startup parameter '$name': $sidecarPath" }
-            $seenNames += $name
-            if ($override.value -is [System.Management.Automation.PSCustomObject] -or $override.value -is [System.Array] -or $null -eq $override.value) { throw "Model startup parameter '$name' must have a scalar value: $sidecarPath" }
-            $existing = @($effective.startup_parameters | Where-Object { [string]$_.name -ieq $name }) | Select-Object -First 1
-            if ($null -ne $existing) { $existing.value = $override.value }
-            else { $effective.startup_parameters = @($effective.startup_parameters) + @([pscustomobject][ordered]@{ name=$name; value=$override.value }) }
-        }
-    }
-    if ($null -ne $sidecar.PSObject.Properties['request_parameters']) {
-        if ($sidecar.request_parameters -isnot [System.Management.Automation.PSCustomObject]) { throw "Model sidecar request_parameters must be an object: $sidecarPath" }
-        foreach ($property in $sidecar.request_parameters.PSObject.Properties) {
-            if ($property.Name -notmatch '^[A-Za-z][A-Za-z0-9_]*$' -or $property.Name -in @('messages','stream','response_format')) { throw "Invalid model request parameter '$($property.Name)': $sidecarPath" }
-            if ($property.Value -is [System.Management.Automation.PSCustomObject] -or $property.Value -is [System.Array] -or $null -eq $property.Value) { throw "Model request parameter '$($property.Name)' must have a scalar value: $sidecarPath" }
-            $effective.request_parameters | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value -Force
-        }
-    }
-    $effectiveContext = Get-StructuredProperty $effective.request_parameters 'context_size'
-    if (-not $effectiveContext.exists -or [int]$effectiveContext.value -lt 1) { throw "Model sidecar context_size must be positive: $sidecarPath" }
-    return $effective
+    return ($json | ConvertFrom-Json)
 }
 
 function Get-KoboldCppLaunchArguments([object]$Settings, [string]$ModelPath) {
@@ -117,11 +101,8 @@ function Get-KoboldCppLaunchArguments([object]$Settings, [string]$ModelPath) {
     return $arguments.ToArray()
 }
 
-function Save-KoboldCppSettings([string]$Path, [object]$Settings) {
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
-    $temporaryPath = "$Path.tmp"
-    $json = $Settings | ConvertTo-Json -Depth 60
-    [IO.File]::WriteAllText($temporaryPath, $json, [Text.UTF8Encoding]::new($false))
-    if (Test-Path -LiteralPath $Path -PathType Leaf) { [IO.File]::Replace($temporaryPath, $Path, $null) }
-    else { [IO.File]::Move($temporaryPath, $Path) }
+function Save-KoboldCppSettings([string]$Path, [object]$Settings,[object]$Dependencies=$null) {
+    $persisted=Copy-AtaraxiaModelParameterPresetValue $Settings
+    foreach($runtimeField in @('parameter_presets','active_parameter_preset_id','user_preset_data','preset_catalog_needs_save')){$persisted.PSObject.Properties.Remove($runtimeField)}
+    Write-AtaraxiaJsonStoreFile $Path $persisted $Dependencies 60
 }

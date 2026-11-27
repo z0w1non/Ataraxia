@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "presets": [
+    {
+      "id": "qwen3_5_instruct_general",
+      "name": "Qwen 3.5 Instruct — 汎用",
+      "name_en": "Qwen 3.5 Instruct — General",
+      "family": "Qwen",
+      "purpose": "非思考モードの一般タスク向け。Qwen提供元の推奨値。",
+      "model_examples": ["Qwen3.5 Instruct"],
+      "source_url": "https://huggingface.co/Qwen/Qwen3.5-9B",
+      "request_parameters": {"context_size": 8192, "max_tokens": 2048, "temperature": 0.7, "top_p": 0.8, "top_k": 20, "presence_penalty": 1.5, "frequency_penalty": 0, "repetition_penalty": 1, "seed": -1, "stop": []}
+    },
+    {
+      "id": "qwen3_5_thinking_general",
+      "name": "Qwen 3.5 Thinking — 汎用",
+      "name_en": "Qwen 3.5 Thinking — General",
+      "family": "Qwen",
+      "purpose": "思考モードの一般タスク向け。Qwen提供元の推奨値。",
+      "model_examples": ["Qwen3.5 Thinking"],
+      "source_url": "https://huggingface.co/Qwen/Qwen3.5-9B",
+      "request_parameters": {"context_size": 8192, "max_tokens": 2048, "temperature": 1, "top_p": 0.95, "top_k": 20, "presence_penalty": 1.5, "frequency_penalty": 0, "repetition_penalty": 1, "seed": -1, "stop": []}
+    },
+    {
+      "id": "qwen3_5_thinking_coding",
+      "name": "Qwen 3.5 Thinking — 精密コーディング",
+      "name_en": "Qwen 3.5 Thinking — Precise coding",
+      "family": "Qwen",
+      "purpose": "思考モードで精密なコーディングを行う場合のQwen提供元推奨値。",
+      "model_examples": ["Qwen3.5 Thinking"],
+      "source_url": "https://huggingface.co/Qwen/Qwen3.5-9B",
+      "request_parameters": {"context_size": 8192, "max_tokens": 2048, "temperature": 0.6, "top_p": 0.95, "top_k": 20, "presence_penalty": 0, "frequency_penalty": 0, "repetition_penalty": 1, "seed": -1, "stop": []}
+    },
+    {
+      "id": "llama4_instruct",
+      "name": "Llama 4 — Instruct",
+      "name_en": "Llama 4 — Instruct",
+      "family": "Llama",
+      "purpose": "Metaの公式生成実装が示すtemperatureとtop_pの初期値。top_kは適用しない。",
+      "model_examples": ["Llama 4 Scout", "Llama 4 Maverick"],
+      "source_url": "https://github.com/meta-llama/llama-models/blob/main/models/llama4/generation.py",
+      "request_parameters": {"context_size": 8192, "max_tokens": 2048, "temperature": 0.6, "top_p": 0.9, "top_k": 0, "presence_penalty": 0, "frequency_penalty": 0, "repetition_penalty": 1, "seed": -1, "stop": []}
+    },
+    {
+      "id": "gemma4_it",
+      "name": "Gemma 4 — Instruct",
+      "name_en": "Gemma 4 — Instruct",
+      "family": "Gemma",
+      "purpose": "Google提供元のgeneration_config.jsonに記載されたサンプリング値。",
+      "model_examples": ["Gemma 4 E2B/E4B", "Gemma 4 12B", "Gemma 4 26B/31B"],
+      "source_url": "https://huggingface.co/google/gemma-4-12B-it/blob/main/generation_config.json",
+      "request_parameters": {"context_size": 8192, "max_tokens": 2048, "temperature": 1, "top_p": 0.95, "top_k": 64, "presence_penalty": 0, "frequency_penalty": 0, "repetition_penalty": 1, "seed": -1, "stop": []}
+    },
+    {
+      "id": "mistral_small_3_2_instruct",
+      "name": "Mistral Small 3.2 — Instruct",
+      "name_en": "Mistral Small 3.2 — Instruct",
+      "family": "Mistral",
+      "purpose": "Mistral提供元のgeneration_config.jsonのtemperatureを使用。top_pとtop_kは無効化。",
+      "model_examples": ["Mistral Small 3.2 24B Instruct"],
+      "source_url": "https://huggingface.co/mistralai/Mistral-Small-3.2-24B-Instruct-2506/blob/main/generation_config.json",
+      "request_parameters": {"context_size": 8192, "max_tokens": 2048, "temperature": 0.15, "top_p": 1, "top_k": 0, "presence_penalty": 0, "frequency_penalty": 0, "repetition_penalty": 1, "seed": -1, "stop": []}
+    },
+    {
+      "id": "deepseek_r1_reasoning",
+      "name": "DeepSeek R1 — 推論",
+      "name_en": "DeepSeek R1 — Reasoning",
+      "family": "DeepSeek",
+      "purpose": "DeepSeek提供元がR1系列に推奨するtemperatureと、公式generation configのtop_p。",
+      "model_examples": ["DeepSeek-R1", "DeepSeek-R1-0528", "DeepSeek-R1-Distill"],
+      "source_url": "https://huggingface.co/deepseek-ai/DeepSeek-R1",
+      "request_parameters": {"context_size": 8192, "max_tokens": 2048, "temperature": 0.6, "top_p": 0.95, "top_k": 0, "presence_penalty": 0, "frequency_penalty": 0, "repetition_penalty": 1, "seed": -1, "stop": []}
+    }
+  ]
+}

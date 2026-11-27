@@ -42,7 +42,7 @@ try {
         foreach($image in $iconPayloads){$writer.Write([byte[]]$image.bytes)}
     } finally {$writer.Dispose();$iconStream.Dispose()}
 } finally {$sourceImage.Dispose()}
-& $compiler[0] /nologo /target:winexe "/out:$resolvedOutput" "/win32icon:$iconPath" /reference:System.Windows.Forms.dll $sourcePath
+& $compiler[0] /nologo /target:winexe "/out:$resolvedOutput" "/win32icon:$iconPath" $sourcePath
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $resolvedOutput -PathType Leaf)) { throw 'Ataraxia launcher compilation failed.' }
 Write-Output "Launcher built: $resolvedOutput"
 Write-Output "Icon built: $iconPath"

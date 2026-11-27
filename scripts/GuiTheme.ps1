@@ -1,9 +1,9 @@
 ﻿function Get-AtaraxiaThemePalette {
     param([ValidateSet('light','dark')][string]$Mode)
     if($Mode -eq 'light'){
-        return [pscustomobject][ordered]@{app_background='#FAFAFA';surface='#FFFFFF';panel='#F0F0F0';drawer='#F7F7F7';primary_text='#141414';secondary_text='#555555';border='#D0D0D0';accent='#303030';accent_text='#FFFFFF';icon='#303030'}
+        return [pscustomobject][ordered]@{app_background='#F5F7FB';surface='#FFFFFF';panel='#EAF0FA';drawer='#EEF2F8';primary_text='#172033';secondary_text='#526078';border='#D7DFEC';accent='#4059C7';accent_text='#FFFFFF';icon='#5F5F5F'}
     }
-    return [pscustomobject][ordered]@{app_background='#181818';surface='#202020';panel='#2C2C2C';drawer='#1D1D1D';primary_text='#F5F5F5';secondary_text='#B8B8B8';border='#505050';accent='#E5E5E5';accent_text='#111111';icon='#E0E0E0'}
+    return [pscustomobject][ordered]@{app_background='#111827';surface='#1D2B40';panel='#263750';drawer='#151F30';primary_text='#F1F5FC';secondary_text='#B5C1D4';border='#42536D';accent='#93AAFF';accent_text='#1C1C1C';icon='#C7C7C7'}
 }
 function Get-AtaraxiaContrastRatio {
     param([string]$Foreground,[string]$Background)
@@ -15,9 +15,15 @@ function Resolve-AtaraxiaThemeMode {
     param([ValidateSet('system','light','dark')][string]$Preference,[ValidateSet('light','dark')][string]$SystemMode)
     if($Preference -eq 'system') { return $SystemMode }; return $Preference
 }
-function Get-AtaraxiaSystemTheme {
-    try{$value=(Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name AppsUseLightTheme -ErrorAction Stop).AppsUseLightTheme;if($null -ne $value){if([int]$value -eq 0){return 'dark'};if([int]$value -eq 1){return 'light'}}}catch{}
-    return 'light'
+function New-AtaraxiaGuiThemeState {
+    return [pscustomobject]@{preference='system';effective=''}
+}
+function Set-AtaraxiaGuiThemeState {
+    param([Parameter(Mandatory)][object]$State,[string]$Preference,[ValidateSet('light','dark')][string]$SystemMode)
+    if($Preference -notin @('system','light','dark')){return [pscustomobject]@{accepted=$false;state=$State;apply_theme=$false;sync_selector=$false}}
+    $effective=Resolve-AtaraxiaThemeMode $Preference $SystemMode
+    $next=[pscustomobject]@{preference=$Preference;effective=$effective}
+    return [pscustomobject]@{accepted=$true;state=$next;apply_theme=($State.effective -ne $effective);sync_selector=($State.preference -ne $Preference)}
 }
 
 

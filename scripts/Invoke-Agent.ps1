@@ -13,19 +13,28 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'AgentCore.ps1')
 . (Join-Path $PSScriptRoot 'AgentHarness.ps1')
+. (Join-Path $PSScriptRoot 'PowerShellProcessRunner.ps1')
+. (Join-Path $PSScriptRoot 'FileSystemWorkspaceStore.ps1')
 . (Join-Path $PSScriptRoot 'Logging.ps1')
 . (Join-Path $PSScriptRoot 'KoboldCppSettings.ps1')
 . (Join-Path $PSScriptRoot 'KoboldCppApi.ps1')
 . (Join-Path $PSScriptRoot 'SessionStore.ps1')
 . (Join-Path $PSScriptRoot 'CommonPrompts.ps1')
+. (Join-Path $PSScriptRoot 'TaskExecutionLock.ps1')
 
-if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { throw (Get-AppText 'config_file_missing' @($ConfigPath)) }
-$config = Read-AgentJsonFile $ConfigPath
+$harnessFileStore=New-AtaraxiaJsonFileStoreDependencies
+if (-not (Test-AtaraxiaJsonStoreFile $ConfigPath $harnessFileStore)) { throw (Get-AppText 'config_file_missing' @($ConfigPath)) }
+$config = Read-AtaraxiaJsonStoreFile $ConfigPath $harnessFileStore
 if ([string]::IsNullOrWhiteSpace([string]$config.interface_language)) { throw (Get-AppText 'config_language_required') }
 Set-AppLanguage ([string]$config.interface_language)
 $koboldcppSettings = Import-KoboldCppSettings $config $ConfigPath
+Agent-ValidateExecutionConfig $config
 $config | Add-Member -NotePropertyName role_contracts -NotePropertyValue (Import-RoleContracts $config $ConfigPath) -Force
-$harnessSettings = Import-AgentHarnessSettings $config $ConfigPath
+$workspaceReaderDependencies=New-AgentWorkspaceFileSystemDependencies
+$harnessSettings = Import-AgentHarnessSettings $config $ConfigPath $harnessFileStore
+$workspaceFileStore=New-AgentWorkspaceFileStoreDependencies
+$processRunnerAdapter={param($Resolved,$WorkspaceDirectory)Invoke-AtaraxiaPowerShellProcess $Resolved $WorkspaceDirectory}.GetNewClosure()
+$commandExecutionDependencies=New-AgentHarnessDependencies -RunCommand $processRunnerAdapter
 if ([string]::IsNullOrWhiteSpace([string]$config.user_output_language)) { throw (Get-AppText 'output_language_required') }
 $projectName = [string]$config.project_name
 if ($projectName -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$') { throw 'config.project_name must be a safe project folder name.' }
@@ -33,33 +42,37 @@ $projectDirectory = Join-Path (Join-Path $projectRoot 'projects') $projectName
 $taskPath = if ($PSCmdlet.ParameterSetName -eq 'New') { Join-Path $projectDirectory "$New.task.json" } else { if ($PSCmdlet.ParameterSetName -eq 'Run') { $Run } elseif($PSCmdlet.ParameterSetName -eq 'Rollback'){$Rollback}else{$Resume} }
 if ($PSCmdlet.ParameterSetName -eq 'New') {
     if ($New -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$') { throw (Get-AppText 'task_name_invalid') }
-    if (Test-Path -LiteralPath $taskPath -PathType Leaf) { throw "Task already exists: $taskPath" }
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $taskPath) | Out-Null
-    $task = Agent-NewTaskTemplate $New $config.role_contracts | ConvertTo-Json -Depth 20
-    Set-Content -LiteralPath $taskPath -Value $task -Encoding UTF8
+    if (Test-AtaraxiaJsonStoreFile $taskPath $harnessFileStore) { throw "Task already exists: $taskPath" }
+    Ensure-AtaraxiaJsonStoreDirectory (Split-Path -Parent $taskPath) $harnessFileStore
+    $task = Agent-NewTaskTemplate $New $config.role_contracts
+    Write-AtaraxiaJsonStoreFile $taskPath $task $harnessFileStore 20
     Write-AppLogEvent (New-AppLogEvent -Kind 'result' -Data ([ordered]@{ task_created=$true; path=$taskPath }))
     exit 0
 }
 
-$task = Read-AgentJsonFile $taskPath
+$taskLockPath=Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($taskPath))) '.ataraxia-run.lock'
+$taskLockDependencies=New-AgentTaskExecutionLockDependencies
+$taskLock=Enter-AgentTaskExecutionLock $taskLockPath $taskLockDependencies
+try {
+$task = Read-AtaraxiaJsonStoreFile $taskPath $harnessFileStore
 $coreSupportChanged=$false
 if($PSCmdlet.ParameterSetName -ne 'Rollback'){$coreSupportChanged=Agent-EnsureCoreWorkflow $task $config.role_contracts}
 Agent-ValidateTask $task
-if($coreSupportChanged){$migrationJson=$task|ConvertTo-Json -Depth 100;[IO.File]::WriteAllText("$taskPath.tmp",$migrationJson,[Text.UTF8Encoding]::new($false));Move-Item -LiteralPath "$taskPath.tmp" -Destination $taskPath -Force}
+if($coreSupportChanged){Write-AtaraxiaJsonStoreFile $taskPath $task $harnessFileStore 100}
 if ($Step -eq 0 -or $Step -lt -1) { throw (Get-AppText 'step_invalid') }
 $taskDir = Split-Path -Parent $taskPath
 $config | Add-Member -NotePropertyName agent_common_prompt -NotePropertyValue (Get-AtaraxiaCommonPromptForTaskDirectory $taskDir) -Force
-$workspaceDirectory = Resolve-AgentWorkspaceDirectory ([string]$task.working_directory) $taskDir
+$workspaceDirectory = Resolve-AgentWorkspaceDirectory ([string]$task.working_directory) $taskDir $workspaceReaderDependencies
 $statePath = Join-Path $taskDir 'state.json'
 $journalPath = Join-Path $taskDir 'run-changes.json'
 if($PSCmdlet.ParameterSetName -eq 'Rollback'){
-    $restored=Restore-AgentRunChanges $workspaceDirectory $journalPath $statePath
+    $restored=Restore-AgentRunChanges $workspaceDirectory $journalPath $statePath $workspaceFileStore
     Write-AppLogEvent (New-AppLogEvent -Kind 'result' -Data ([ordered]@{run_stopped=$true;restored_files=@($restored.restored_files);state_restored=[bool]$restored.state_restored}))
     exit 0
 }
 $sessionMetadataPath=Join-Path $taskDir 'session.json'
-if(Test-Path -LiteralPath $sessionMetadataPath -PathType Leaf){
-    $sessionMetadata=Read-AgentJsonFile $sessionMetadataPath
+if(Test-AtaraxiaJsonStoreFile $sessionMetadataPath $harnessFileStore){
+    $sessionMetadata=Read-AtaraxiaJsonStoreFile $sessionMetadataPath $harnessFileStore
     $generatedProperty=$sessionMetadata.PSObject.Properties['title_generated']
     if($null -ne $generatedProperty -and -not [bool]$generatedProperty.Value -and -not [string]::IsNullOrWhiteSpace([string]$task.goal)){
         $namer=@($task.roles|Where-Object{$_.id -eq 'session_namer'}|Select-Object -First 1)
@@ -73,17 +86,19 @@ if(Test-Path -LiteralPath $sessionMetadataPath -PathType Leaf){
             Write-AppLogEvent (New-AppLogEvent -Kind 'run' -Data ([ordered]@{role='session_namer'}))
             $compressorRole=@($task.roles|Where-Object{$_.id -eq 'context_compressor'}|Select-Object -First 1)
             $nameResult=Agent-InvokeRole $config $namerMessages (Agent-GetSchema 'session_namer' $namerRole) $namerRole.output_schema 'session_namer' $(if($compressorRole.Count -gt 0){$compressorRole[0]}else{$null})
-            Set-AtaraxiaSessionTitle $taskDir ([string]$nameResult.title) 'agent'|Out-Null
+            Set-AtaraxiaSessionTitle $taskDir ([string]$nameResult.title) 'agent' $harnessFileStore|Out-Null
         }
     }
 }
-$null=New-AgentChangeJournal $journalPath $workspaceDirectory $statePath
-$state = if (Test-Path -LiteralPath $statePath) { Read-AgentJsonFile $statePath 2097152 } else { [pscustomobject]@{ cycle=0; phase=[string]$task.workflow.initial_stage; history=@(); results=[pscustomobject]@{} } }
+function Save-AgentTaskState([string]$Path,[object]$State,[string]$Journal) { Agent-SaveState $Path $State $Journal $workspaceFileStore }
+function Apply-AgentTaskWorkspaceChanges([string]$Workspace,[object[]]$Changes,[string]$Journal) { Apply-AgentWorkspaceChanges $Workspace $Changes $Journal $workspaceFileStore }
+$null=New-AgentChangeJournal $journalPath $workspaceDirectory $statePath $workspaceFileStore
+$state = if (Test-AtaraxiaJsonStoreFile $statePath $harnessFileStore) { Read-AtaraxiaJsonStoreFile $statePath $harnessFileStore 2097152 } else { [pscustomobject]@{ cycle=0; phase=[string]$task.workflow.initial_stage; history=@(); results=[pscustomobject]@{} } }
 $state = Agent-ValidateState $state $task
 $hasCoreRole=(@($task.roles|Where-Object{$_.id -eq 'core'}).Count -gt 0 -and $null -ne (Agent-GetWorkflowStage $task.workflow 'Core'))
 $coreConfiguredProperty=Get-StructuredProperty $task.workflow 'core_configured'
 if($hasCoreRole -and -not $coreConfiguredProperty.exists -and [string]$state.phase -ne 'Core'){
-    $state.phase='Core';$state|Add-Member -NotePropertyName core_request_id -NotePropertyValue ([guid]::NewGuid().ToString('N')) -Force;Agent-SaveState $statePath $state $journalPath
+    $state.phase='Core';$state|Add-Member -NotePropertyName core_request_id -NotePropertyValue ([guid]::NewGuid().ToString('N')) -Force;Save-AgentTaskState $statePath $state $journalPath
 }
 if($hasCoreRole -and $coreConfiguredProperty.exists -and [bool]$coreConfiguredProperty.value){
     $goalChanged=([string](Get-StructuredProperty $task 'core_request_goal').value -cne [string]$task.goal)
@@ -92,15 +107,15 @@ if($hasCoreRole -and $coreConfiguredProperty.exists -and [bool]$coreConfiguredPr
     if($goalChanged -or (($atTerminal -or $awaitingUser) -and $PSCmdlet.ParameterSetName -eq 'Run')){
         $state.phase='Core';$state|Add-Member -NotePropertyName core_request_id -NotePropertyValue ([guid]::NewGuid().ToString('N')) -Force
         $state|Add-Member -NotePropertyName core_replans_this_query -NotePropertyValue 0 -Force
-        Agent-SaveState $statePath $state $journalPath
+        Save-AgentTaskState $statePath $state $journalPath
     }
 }
 if($hasCoreRole -and [string]$state.phase -eq 'Core'){
     $stateRequestId=Get-StructuredProperty $state 'core_request_id'
-    if(-not $stateRequestId.exists){$stateRequestId=[pscustomobject]@{exists=$true;value=[guid]::NewGuid().ToString('N')};$state|Add-Member -NotePropertyName core_request_id -NotePropertyValue $stateRequestId.value -Force;Agent-SaveState $statePath $state $journalPath}
+    if(-not $stateRequestId.exists){$stateRequestId=[pscustomobject]@{exists=$true;value=[guid]::NewGuid().ToString('N')};$state|Add-Member -NotePropertyName core_request_id -NotePropertyValue $stateRequestId.value -Force;Save-AgentTaskState $statePath $state $journalPath}
     $taskRequestId=Get-StructuredProperty $task.workflow 'core_request_id'
     if($coreConfiguredProperty.exists -and [bool]$coreConfiguredProperty.value -and $taskRequestId.exists -and [string]$taskRequestId.value -ceq [string]$stateRequestId.value){
-        $configuredCore=Agent-GetWorkflowStage $task.workflow 'Core';$state.phase=[string]$configuredCore.default_next;Agent-SaveState $statePath $state $journalPath
+        $configuredCore=Agent-GetWorkflowStage $task.workflow 'Core';$state.phase=[string]$configuredCore.default_next;Save-AgentTaskState $statePath $state $journalPath
     }
 }
 $steps = if ($Step -eq -1) { [int]::MaxValue } else { $Step }
@@ -112,7 +127,7 @@ for ($i = 0; $i -lt $steps; $i++) {
         $replanCount=Get-StructuredProperty $state 'core_replans_this_query';$count=if($replanCount.exists){[int]$replanCount.value}else{0}
         $replanLimit=Get-StructuredProperty $task.workflow 'max_core_replans_per_query';$limit=if($replanLimit.exists){[int]$replanLimit.value}else{2}
         if($count -ge $limit){throw 'The workflow reached its configured Core replan limit for this user query.'}
-        $state.phase='Core';$state|Add-Member -NotePropertyName core_replans_this_query -NotePropertyValue ($count+1) -Force;$state|Add-Member -NotePropertyName core_request_id -NotePropertyValue ([guid]::NewGuid().ToString('N')) -Force;Agent-SaveState $statePath $state $journalPath
+        $state.phase='Core';$state|Add-Member -NotePropertyName core_replans_this_query -NotePropertyValue ($count+1) -Force;$state|Add-Member -NotePropertyName core_request_id -NotePropertyValue ([guid]::NewGuid().ToString('N')) -Force;Save-AgentTaskState $statePath $state $journalPath
     }
     $phase = [string]$state.phase
     $stage = Agent-GetWorkflowStage $task.workflow $phase
@@ -129,13 +144,14 @@ for ($i = 0; $i -lt $steps; $i++) {
         if ($estimatedTokens -gt $threshold) {
             if ($null -eq $compressorRoleConfig) { throw (Get-AppText 'task_role_not_defined' @($compressorRoleId)) }
             $state = Agent-CompressContext $config $task $state $compressorRoleConfig $phase ([int]$compressionConfig.target_tokens)
-            Agent-SaveState $statePath $state $journalPath
+            Save-AgentTaskState $statePath $state $journalPath
         }
     }
     $system = Agent-GetRoleSystemPrompt $config $roleConfig ([string]$roleConfig.purpose)
     $phaseInput = Agent-GetPhaseInput $task $state $phase
-    $phaseInput | Add-Member -NotePropertyName workspace_files -NotePropertyValue (Get-AgentWorkspaceSnapshot $workspaceDirectory $harnessSettings) -Force
-    $mediaPayloads = @(Get-AgentWorkspaceMedia $workspaceDirectory $harnessSettings)
+    $workspaceContext=Get-AgentWorkspaceContext $workspaceDirectory $harnessSettings $workspaceReaderDependencies
+    $phaseInput | Add-Member -NotePropertyName workspace_files -NotePropertyValue $workspaceContext.files -Force
+    $mediaPayloads = @($workspaceContext.media)
     $phaseInput | Add-Member -NotePropertyName workspace_media -NotePropertyValue @($mediaPayloads | ForEach-Object { [pscustomobject][ordered]@{ path=$_.path; mime_type=$_.mime_type; sha256=$_.sha256; byte_length=$_.byte_length } }) -Force
     if ($phase -eq 'Route') {
         $routeOptions = @(Agent-GetRoutingOptions $task $state)
@@ -159,9 +175,7 @@ for ($i = 0; $i -lt $steps; $i++) {
         $task=Agent-InstallDesignedWorkflow $task $result $state
         $taskJson=$task|ConvertTo-Json -Depth 100
         if([Text.Encoding]::UTF8.GetByteCount($taskJson) -gt 4194304){throw 'Task definition exceeds the 4 MiB safety limit.'}
-        $taskTemporaryPath="$taskPath.tmp"
-        [IO.File]::WriteAllText($taskTemporaryPath,$taskJson,[Text.UTF8Encoding]::new($false))
-        Move-Item -LiteralPath $taskTemporaryPath -Destination $taskPath -Force
+        Write-AtaraxiaJsonStoreFile $taskPath $task $harnessFileStore 100
         $stage=Agent-GetWorkflowStage $task.workflow 'Core'
     }
     $filesChanged = @()
@@ -171,10 +185,10 @@ for ($i = 0; $i -lt $steps; $i++) {
         $commandsProperty = $result.PSObject.Properties[[string]$stage.commands_field]
         if ($null -eq $changesProperty -or $null -eq $commandsProperty) { throw 'Executor result is missing configured file changes or commands.' }
         foreach ($command in @($commandsProperty.Value)) { Resolve-AgentAllowedCommand $harnessSettings $command | Out-Null }
-        $changeResult = Apply-AgentWorkspaceChanges $workspaceDirectory @($changesProperty.Value) $journalPath
+        $changeResult = Apply-AgentTaskWorkspaceChanges $workspaceDirectory @($changesProperty.Value) $journalPath
         $filesChanged = @($changeResult.changed_files)
-        $commandsRun = @(Invoke-AgentCommandBatch $harnessSettings $workspaceDirectory @($commandsProperty.Value))
-        Sync-AgentChangeJournal $journalPath $workspaceDirectory
+        $commandsRun = @(Invoke-AgentCommandBatch $harnessSettings $workspaceDirectory @($commandsProperty.Value) $commandExecutionDependencies)
+        Sync-AgentChangeJournal $journalPath $workspaceDirectory $workspaceFileStore
     }
     $reportConfig = @($task.roles | Where-Object { $_.id -eq 'reporter' })[0]
     $roleReport = $null
@@ -193,11 +207,13 @@ for ($i = 0; $i -lt $steps; $i++) {
     $entry = [pscustomobject][ordered]@{ timestamp=[DateTime]::UtcNow.ToString('o'); cycle=$state.cycle; phase=$phase; role=$role; result=$result; report=$roleReport; files_changed=$filesChanged; commands_run=$commandsRun }
     $state.history = @($state.history) + @($entry)
     $state = Agent-NextState $state $task.workflow $stage $result
-    Agent-SaveState $statePath $state $journalPath
+    Save-AgentTaskState $statePath $state $journalPath
     $stepCount++
     Write-AppLogEvent (New-AppLogEvent -Kind 'result' -Data ([ordered]@{ cycle=$state.cycle; phase=$phase; role=$role }))
     if ($state.phase -eq $task.workflow.terminal_state) { Write-AppLogEvent (New-AppLogEvent -Kind 'result' -Data ([ordered]@{ task_completed=$true; step_count=$stepCount })); break }
     if($waitingState.exists -and [string]$state.phase -eq [string]$waitingState.value){Write-AppLogEvent (New-AppLogEvent -Kind 'result' -Data ([ordered]@{awaiting_user_query=$true;step_count=$stepCount}));break}
 }
-if(Test-Path -LiteralPath $journalPath -PathType Leaf){Remove-Item -LiteralPath $journalPath -Force}
-
+if(Test-AgentWorkspaceStoreFile $workspaceFileStore $journalPath){Remove-AgentWorkspaceStoreFile $workspaceFileStore $journalPath}
+} finally {
+    Exit-AgentTaskExecutionLock $taskLock $taskLockDependencies
+}

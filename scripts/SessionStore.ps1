@@ -1,18 +1,48 @@
 ﻿Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'StructuredData.ps1')
+. (Join-Path $PSScriptRoot 'JsonFileStore.ps1')
+
+function New-AtaraxiaSessionStoreDependencies([scriptblock]$PathExists=$null,[scriptblock]$CreateDirectory=$null,[scriptblock]$WriteJson=$null,[scriptblock]$UtcNow=$null,[scriptblock]$NewId=$null,[scriptblock]$ReadJson=$null,[object]$FileStore=$null) {
+    return [pscustomobject]@{ path_exists=$PathExists; create_directory=$CreateDirectory; write_json=$WriteJson; utc_now=$UtcNow; new_id=$NewId; read_json=$ReadJson; file_store=$FileStore }
+}
+
+function Test-AtaraxiaSessionPath([string]$Path,[object]$Dependencies) {
+    if($null -ne $Dependencies -and $Dependencies.path_exists -is [scriptblock]) { return [bool](& $Dependencies.path_exists $Path) }
+    if($null -ne $Dependencies -and $null -ne $Dependencies.PSObject.Properties['file_store']){return Test-AtaraxiaStorePath $Path 'Container' $Dependencies.file_store}
+    return Test-Path -LiteralPath $Path -PathType Container
+}
+
+function New-AtaraxiaSessionDirectory([string]$Path,[object]$Dependencies,[switch]$Force) {
+    if($null -ne $Dependencies -and $Dependencies.create_directory -is [scriptblock]) { & $Dependencies.create_directory $Path ([bool]$Force) | Out-Null; return }
+    if($null -ne $Dependencies -and $null -ne $Dependencies.PSObject.Properties['file_store']){Ensure-AtaraxiaJsonStoreDirectory $Path $Dependencies.file_store;return}
+    New-Item -ItemType Directory -Force:$Force -Path $Path | Out-Null
+}
+
+function Write-AtaraxiaSessionJson([string]$Path,[object]$Value,[object]$Dependencies) {
+    if($null -ne $Dependencies -and $Dependencies.write_json -is [scriptblock]) { & $Dependencies.write_json $Path $Value | Out-Null; return }
+    if($null -ne $Dependencies -and $null -ne $Dependencies.PSObject.Properties['file_store']){Write-AtaraxiaJsonStoreFile $Path $Value $Dependencies.file_store 50;return}
+    Write-AtaraxiaJsonStoreFile $Path $Value $Dependencies 50
+}
+
+function Get-AtaraxiaSessionClock([object]$Dependencies) {
+    if($null -ne $Dependencies -and $Dependencies.utc_now -is [scriptblock]) { return (& $Dependencies.utc_now) }
+    return [DateTime]::UtcNow
+}
 
 function Get-AtaraxiaSessionsRoot([string]$ProjectPath) {
     return Join-Path $ProjectPath 'sessions'
 }
 
-function Get-AtaraxiaSessions([string]$ProjectPath) {
+function Get-AtaraxiaSessions([string]$ProjectPath,[object]$Dependencies=$null) {
+    if($Dependencies -is [scriptblock]){$Dependencies=[pscustomobject]@{read_json=$Dependencies;file_store=$null}}
     $root=Get-AtaraxiaSessionsRoot $ProjectPath
-    if(-not(Test-Path -LiteralPath $root -PathType Container)){return @()}
+    $fileStore=if($null -ne $Dependencies -and $null -ne $Dependencies.PSObject.Properties['file_store']){$Dependencies.file_store}else{$Dependencies}
+    if(-not(Test-AtaraxiaStorePath $root 'Container' $fileStore)){return @()}
     $sessions=[System.Collections.Generic.List[object]]::new()
-    foreach($item in Get-ChildItem -LiteralPath $root -Directory){
+    foreach($item in Get-AtaraxiaStoreDirectories $root $fileStore){
         $metadataPath=Join-Path $item.FullName 'session.json'
-        if(-not(Test-Path -LiteralPath $metadataPath -PathType Leaf)){continue}
-        try{$metadata=Read-AgentJsonFile $metadataPath}catch{continue}
+        if(-not(Test-AtaraxiaStorePath $metadataPath 'Leaf' $fileStore)){continue}
+        try{$metadata=Read-AtaraxiaJsonStoreFile $metadataPath $Dependencies}catch{continue}
         if($metadata.artifact_type -ne 'session' -or [string]::IsNullOrWhiteSpace([string]$metadata.id)){continue}
         $metadata|Add-Member -NotePropertyName path -NotePropertyValue $item.FullName -Force
         $sessions.Add($metadata)
@@ -20,18 +50,20 @@ function Get-AtaraxiaSessions([string]$ProjectPath) {
     return @($sessions|Sort-Object {[string]$_.updated_at} -Descending)
 }
 
-function Get-AtaraxiaRecentSessions([string]$ProjectsRoot,[int]$Maximum=5) {
+function Get-AtaraxiaRecentSessions([string]$ProjectsRoot,[int]$Maximum=5,[object]$Dependencies=$null) {
+    if($Dependencies -is [scriptblock]){$Dependencies=[pscustomobject]@{read_json=$Dependencies;file_store=$null}}
     if($Maximum -lt 1){return @()}
     $recent=[System.Collections.Generic.List[object]]::new()
-    if(-not(Test-Path -LiteralPath $ProjectsRoot -PathType Container)){return @()}
-    foreach($projectItem in Get-ChildItem -LiteralPath $ProjectsRoot -Directory){
+    $fileStore=if($null -ne $Dependencies -and $null -ne $Dependencies.PSObject.Properties['file_store']){$Dependencies.file_store}else{$Dependencies}
+    if(-not(Test-AtaraxiaStorePath $ProjectsRoot 'Container' $fileStore)){return @()}
+    foreach($projectItem in Get-AtaraxiaStoreDirectories $ProjectsRoot $fileStore){
         $projectName=$projectItem.Name
         if($projectName -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$'){continue}
         $projectPath=Join-Path $ProjectsRoot $projectName
-        foreach($session in Get-AtaraxiaSessions $projectPath){
+        foreach($session in Get-AtaraxiaSessions $projectPath $Dependencies){
             $conversationPath=Join-Path ([string]$session.path) 'conversation.json'
-            if(-not(Test-Path -LiteralPath $conversationPath -PathType Leaf)){continue}
-            try{$conversation=Read-AgentJsonFile $conversationPath;$query=@($conversation.entries|Where-Object{$_.kind -eq 'user_query'}|Sort-Object {[string]$_.timestamp}|Select-Object -Last 1);if($query.Count -eq 0){continue};$requestedAt=[DateTime]::Parse([string]$query[0].timestamp).ToUniversalTime()}catch{continue}
+            if(-not(Test-AtaraxiaStorePath $conversationPath 'Leaf' $fileStore)){continue}
+            try{$conversation=Read-AtaraxiaJsonStoreFile $conversationPath $Dependencies;$query=@($conversation.entries|Where-Object{$_.kind -eq 'user_query'}|Sort-Object {[string]$_.timestamp}|Select-Object -Last 1);if($query.Count -eq 0){continue};$requestedAt=[DateTime]::Parse([string]$query[0].timestamp).ToUniversalTime()}catch{continue}
             $session|Add-Member -NotePropertyName project_name -NotePropertyValue $projectName -Force
             $session|Add-Member -NotePropertyName last_request_at -NotePropertyValue $requestedAt -Force
             $recent.Add($session)
@@ -40,43 +72,45 @@ function Get-AtaraxiaRecentSessions([string]$ProjectsRoot,[int]$Maximum=5) {
     return @($recent|Sort-Object last_request_at -Descending|Select-Object -First $Maximum)
 }
 
-function New-AtaraxiaSession([string]$ProjectPath,[object]$RoleContracts,[string]$Title='New session') {
-    if(-not(Test-Path -LiteralPath $ProjectPath -PathType Container)){throw "Project directory was not found: $ProjectPath"}
+function New-AtaraxiaSession([string]$ProjectPath,[object]$RoleContracts,[string]$Title='New session',[object]$Dependencies=$null) {
+    if(-not(Test-AtaraxiaSessionPath $ProjectPath $Dependencies)){throw "Project directory was not found: $ProjectPath"}
     $sessionsRoot=Get-AtaraxiaSessionsRoot $ProjectPath
-    New-Item -ItemType Directory -Force -Path $sessionsRoot|Out-Null
-    $timestamp=[DateTime]::UtcNow
-    $sessionId='session-'+$timestamp.ToString('yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
+    New-AtaraxiaSessionDirectory $sessionsRoot $Dependencies -Force
+    $timestamp=Get-AtaraxiaSessionClock $Dependencies
+    $guid=if($null -ne $Dependencies -and $Dependencies.new_id -is [scriptblock]){[string](& $Dependencies.new_id)}else{[guid]::NewGuid().ToString('N')}
+    if($guid -notmatch '^[0-9a-fA-F]{32}$'){throw 'Session id provider must return 32 hexadecimal characters.'}
+    $sessionId='session-'+$timestamp.ToString('yyyyMMdd-HHmmss')+'-'+$guid.Substring(0,8)
     $sessionPath=Join-Path $sessionsRoot $sessionId
-    New-Item -ItemType Directory -Path $sessionPath|Out-Null
+    New-AtaraxiaSessionDirectory $sessionPath $Dependencies
     $workspace=Join-Path $sessionPath 'workspace'
-    New-Item -ItemType Directory -Path $workspace|Out-Null
+    New-AtaraxiaSessionDirectory $workspace $Dependencies
     $task=Agent-NewTaskTemplate $sessionId $RoleContracts
     $task.working_directory=$workspace
     $task.goal=''
     $taskPath=Join-Path $sessionPath ($sessionId+'.task.json')
-    [IO.File]::WriteAllText($taskPath,($task|ConvertTo-Json -Depth 50),[Text.UTF8Encoding]::new($false))
+    Write-AtaraxiaSessionJson $taskPath $task $Dependencies
     if([string]::IsNullOrWhiteSpace($Title)){$Title='New session'}
     $metadata=[pscustomobject][ordered]@{schema_version=1;artifact_type='session';id=$sessionId;title=$Title;title_generated=$false;title_source='pending';created_at=$timestamp.ToString('o');updated_at=$timestamp.ToString('o');task_file=(Split-Path -Leaf $taskPath)}
-    [IO.File]::WriteAllText((Join-Path $sessionPath 'session.json'),($metadata|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+    Write-AtaraxiaSessionJson (Join-Path $sessionPath 'session.json') $metadata $Dependencies
     $metadata|Add-Member -NotePropertyName path -NotePropertyValue $sessionPath -Force
     return $metadata
 }
 
-function Touch-AtaraxiaSession([string]$SessionDirectory) {
+function Touch-AtaraxiaSession([string]$SessionDirectory,[object]$Dependencies=$null) {
     $metadataPath=Join-Path $SessionDirectory 'session.json'
     if(-not(Test-Path -LiteralPath $metadataPath -PathType Leaf)){return}
-    $metadata=Read-AgentJsonFile $metadataPath
+    $metadata=Read-AtaraxiaJsonStoreFile $metadataPath $Dependencies
     $metadata.updated_at=[DateTime]::UtcNow.ToString('o')
-    [IO.File]::WriteAllText($metadataPath,($metadata|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+    Write-AtaraxiaJsonStoreFile $metadataPath $metadata $Dependencies 10
 }
 
-function Set-AtaraxiaSessionTitle([string]$SessionDirectory,[string]$Title,[ValidateSet('user','agent')][string]$Source='user') {
+function Set-AtaraxiaSessionTitle([string]$SessionDirectory,[string]$Title,[ValidateSet('user','agent')][string]$Source='user',[object]$Dependencies=$null) {
     $cleanTitle=($Title -replace '\s+',' ').Trim()
     if([string]::IsNullOrWhiteSpace($cleanTitle) -or $cleanTitle.Length -gt 64 -or $cleanTitle -match '[\x00-\x1f\x7f]'){throw (Get-AppText 'session_title_invalid')}
     $metadataPath=Join-Path $SessionDirectory 'session.json'
     if(-not(Test-Path -LiteralPath $metadataPath -PathType Leaf)){throw "Session metadata was not found: $metadataPath"}
-    $metadata=Read-AgentJsonFile $metadataPath
+    $metadata=Read-AtaraxiaJsonStoreFile $metadataPath $Dependencies
     $metadata.title=$cleanTitle;$metadata.title_generated=$true;$metadata.title_source=$Source;$metadata.updated_at=[DateTime]::UtcNow.ToString('o')
-    [IO.File]::WriteAllText($metadataPath,($metadata|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+    Write-AtaraxiaJsonStoreFile $metadataPath $metadata $Dependencies 10
     return $metadata
 }

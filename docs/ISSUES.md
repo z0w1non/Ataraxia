@@ -1,14 +1,14 @@
-# Known limitations
+# 既知の制約
 
-- The KoboldCpp initializer currently supports official Windows builds. Linux and macOS acquisition and startup are not implemented.
-- Automatic KoboldCpp acquisition stops when the release API does not provide a verifiable SHA-256 digest.
-- GGUF model licenses, hardware requirements, and provider availability vary; users must review them individually.
-- Workflow execution currently assumes one active runner per task. Concurrent writes to the same task state are not coordinated.
-- Context compression depends on the KoboldCpp tokenizer API being available and returning a valid token count.
+- KoboldCpp初期化処理が現在対応するのは、公式のWindowsビルドである。LinuxとmacOS向けの取得・起動には対応していない。
+- リリースAPIから検証可能なSHA-256ダイジェストを取得できない場合、KoboldCppの自動取得を中止する。
+- GGUFモデルごとにライセンス、ハードウェア要件、提供状況が異なるため、ユーザーが個別に確認する必要がある。
+- ワークフロー実行は、同一タスクに対するAtaraxiaの同時実行、再開、ロールバックをタスクディレクトリ単位の排他ロックで拒否する。作業対象を共有する別タスクや、Ataraxia外からの編集は調整されない。
+- 文脈圧縮には、KoboldCppのTokenizer APIが利用可能で、有効なトークン数を返す必要がある。
 
-## Potential improvements
+## 改善候補
 
-- Add a mock KoboldCpp API for end-to-end workflow tests.
-- Make retry and timeout policies configurable.
-- Add explicit locking for task state and workspace changes.
-- Add portable acquisition and startup support for other operating systems.
+- ワークフロー全体のテスト用に、KoboldCpp APIの偽物を追加する。
+- 再試行とタイムアウトのポリシーを設定可能にする。
+- 別タスクが同じ作業対象を共有できる場合に、作業対象単位の排他制御を追加する。
+- 他のOS向けに、移植可能な取得・起動機能を追加する。
