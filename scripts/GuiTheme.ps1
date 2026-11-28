@@ -1,9 +1,18 @@
 ﻿function Get-AtaraxiaThemePalette {
-    param([ValidateSet('light','dark')][string]$Mode)
-    if($Mode -eq 'light'){
-        return [pscustomobject][ordered]@{app_background='#F5F5F5';surface='#FFFFFF';panel='#E8E8E8';drawer='#EEEEEE';primary_text='#171717';secondary_text='#505050';border='#B8B8B8';accent='#303030';accent_text='#FFFFFF';icon='#505050'}
-    }
-    return [pscustomobject][ordered]@{app_background='#171717';surface='#242424';panel='#303030';drawer='#1D1D1D';primary_text='#F5F5F5';secondary_text='#C2C2C2';border='#666666';accent='#D0D0D0';accent_text='#171717';icon='#D0D0D0'}
+    param([Parameter(Mandatory)][object]$Definitions,[ValidateSet('light','dark')][string]$Mode)
+    $keys=@('app_background','surface','panel','drawer','primary_text','secondary_text','border','accent','accent_text','icon')
+    $definitionKeys=@($Definitions.PSObject.Properties|ForEach-Object{$_.Name}|Sort-Object)
+    if(($definitionKeys -join ',') -cne 'schema_version,themes'){throw 'GUI theme palette definitions have an unexpected root structure.'}
+    if([int]$Definitions.schema_version -ne 1){throw 'Unsupported GUI theme palette schema version.'}
+    $themesProperty=$Definitions.PSObject.Properties['themes'];if($null -eq $themesProperty){throw 'GUI theme palette definitions must contain themes.'}
+    $themeNames=@($themesProperty.Value.PSObject.Properties|ForEach-Object{$_.Name}|Sort-Object)
+    if(($themeNames -join ',') -cne 'dark,light'){throw 'GUI theme palette definitions must contain exactly light and dark themes.'}
+    $themeProperty=$themesProperty.Value.PSObject.Properties[$Mode];if($null -eq $themeProperty){throw "GUI theme palette is missing '$Mode'."}
+    $palette=$themeProperty.Value;$paletteKeys=@($palette.PSObject.Properties|ForEach-Object{$_.Name}|Sort-Object);$expectedKeys=@($keys|Sort-Object)
+    if(($paletteKeys -join ',') -cne ($expectedKeys -join ',')){throw "GUI theme palette '$Mode' has an unexpected structure."}
+    $result=[ordered]@{}
+    foreach($key in $keys){$color=[string]$palette.($key);if($color -notmatch '^#[0-9A-Fa-f]{6}$'){throw "GUI theme palette '$Mode/$key' must be a six-digit hexadecimal color."};$result[$key]=$color.ToUpperInvariant()}
+    return [pscustomobject]$result
 }
 function Get-AtaraxiaContrastRatio {
     param([string]$Foreground,[string]$Background)

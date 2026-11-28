@@ -1,5 +1,7 @@
 # Ataraxia 技術仕様書
 
+READMEはルートの日本語版 [`README.md`](../README.md) と英語版 [`README/en/README.md`](../README/en/README.md) を用意し、各ファイル冒頭のリンクから切り替える。ルートREADMEを日本語の正規入口とし、他言語版は言語フォルダーへ配置する。
+
 GUIの会話表示モデルはWPFやfilesystemに依存せず、会話・実行状態と、Composition側で読み込んだロールアイコンgeometryを受け取って表示用項目へ変換する。固定ラベル、ツールチップ、メニュー文言、テーマ選択肢は `GuiLocalizedPresentation.ps1` が翻訳済みの中立な表示データとして返す。WPF View Adapterは表示キーと `Text` / `ToolTip` 等の具体プロパティの対応だけを行い、ContextMenu Adapterも完成済みの文言を受け取る。会話／設定ページとプロジェクトドロワーの表示状態は `GuiNavigationState.ps1` の画面非依存状態モデルで解決し、WPFイベントはアクションを渡し、返された真偽値をView Port経由で各画面へ反映する。タスクパス、編集状態、保留中プロジェクト、ドロワー展開状態は `GuiScreenState.ps1` の明示モデルに集約し、タスクの読み込みとリセットをモデル遷移として扱う。モデル設定欄のloading／dirty／initialized状態は `GuiModelParameterEditorState.ps1` が保持し、プログラムによるモデル一覧更新中に選択イベントを無視する条件と、保存成功時のdirty解除をWPFなしで検証する。GUIエージェント実行の状態遷移、標準出力カーソル、現在のロール、終了コードは `GuiProcessState.ps1` が保持する。`GuiProcessApplication.ps1` は出力ファイル読取Adapterから差分を受け取り、ロール表示、標準エラー表示、終了時の状態解除と一覧更新要否を返す。実行・ロールバックの起動要求を構成し、`PowerShellGuiProcessAdapter.ps1` がPowerShell子プロセスの開始、状態確認、停止、終了、同期実行を担う。標準出力・標準エラーの読み書き・削除は別の出力Adapterに置く。SVG geometry parserはSVG XML文字列を入力値として扱い、ファイル読込はGUI Composition側が担当する。GUIテーマは希望設定（system/light/dark）と実効テーマ（light/dark）を別々に保持し、headless state modelが変更の受理とpalette再適用の要否を決定する。session selectorのプログラム同期状態もheadless modelで管理し、イベントhandlerはその状態を確認してユーザー選択だけをApplication use caseへ渡す。
 
 ## 目的
@@ -180,6 +182,7 @@ flowchart TD
 | `configs/agent-harness.json` | object | 作業対象読込制限と外部コマンド許可設定。下記「ハーネス設定」 |
 | `configs/role-contracts.json` | object | JSON Schema辞書とロール定義。下記「ロール契約」 |
 | `configs/gui-dialog-contracts.json` | object | ダイアログ入出力契約。下記「GUIダイアログ契約」 |
+| `configs/gui-themes.json` | object | GUIライト／ダークテーマの色パレット。下記「GUIテーマ色」 |
 | `locales/ja.json`、`locales/en.json` | object | ローカライズキーから文字列への辞書 |
 | `data/<resource-user>/sysprompt/<name>.json` | object | システムプロンプト文書。`name` と `content` を持つ |
 | `projects/<project>/project.json` | object | プロジェクトメタデータ。下記「プロジェクト・セッション」 |
@@ -189,6 +192,34 @@ flowchart TD
 | `projects/<project>/sessions/<session>/conversation.json` | object | ユーザークエリ履歴。下記「会話履歴」 |
 | `projects/<project>/sessions/<session>/request-transaction.json` | object | GUIクエリ保存中の回復ジャーナル。下記「クエリ更新ジャーナル」 |
 | `projects/<project>/sessions/<session>/run-changes.json` | object | 実行中の差分と復元用スナップショット。下記「差分ジャーナル」 |
+
+#### GUIテーマ色
+
+`configs/gui-themes.json` はテーマ色を提供するソース管理対象の静的データであり、利用者設定の `gui_theme` は選択状態だけを保持する。ルートobjectの全構造は次のとおり。`schema_version` は整数 `1` 固定、`themes` は `light` と `dark` の両方を必須とする。各パレットは次の10キーを過不足なく持ち、色は `#RRGGBB` 形式の6桁16進数とする。未知のキー、欠落、形式不正、未対応schema versionは拒否する。
+
+```json
+{
+  "schema_version": 1,
+  "themes": {
+    "light": {
+      "app_background": "#RRGGBB", "surface": "#RRGGBB",
+      "panel": "#RRGGBB", "drawer": "#RRGGBB",
+      "primary_text": "#RRGGBB", "secondary_text": "#RRGGBB",
+      "border": "#RRGGBB", "accent": "#RRGGBB",
+      "accent_text": "#RRGGBB", "icon": "#RRGGBB"
+    },
+    "dark": {
+      "app_background": "#RRGGBB", "surface": "#RRGGBB",
+      "panel": "#RRGGBB", "drawer": "#RRGGBB",
+      "primary_text": "#RRGGBB", "secondary_text": "#RRGGBB",
+      "border": "#RRGGBB", "accent": "#RRGGBB",
+      "accent_text": "#RRGGBB", "icon": "#RRGGBB"
+    }
+  }
+}
+```
+
+GUI Composition rootがこのJSONを一度読み込む。`GuiTheme.ps1` は注入された値を検証して選択中テーマの値モデルを返し、`adapters/WpfThemeAdapter.ps1` はその完成済みパレットをWPFリソースへ適用する。パレットの色設計は無彩色とし、通常文字と背景は輝度比7以上、入力欄の副次文字と背景は4.5以上を満たす。
 
 #### 実行設定
 

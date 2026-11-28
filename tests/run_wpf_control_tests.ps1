@@ -4,6 +4,7 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $projectRoot=Split-Path -Parent $PSScriptRoot
+$guiThemeDefinitions=Get-Content -LiteralPath (Join-Path $projectRoot 'configs/gui-themes.json') -Raw -Encoding UTF8|ConvertFrom-Json
 
 function Assert-WpfControlTest([bool]$Condition,[string]$Message){if(-not $Condition){throw $Message}}
 
@@ -48,12 +49,12 @@ try{
     Assert-WpfControlTest ($stop.Text -match 'STOP' -and -not $window.IsVisible) 'An emulated text entry changed no value or caused a visible window.'
 
     $createBrush={param($Hex)([Windows.Media.BrushConverter]::new()).ConvertFromString($Hex)}
-    $darkPalette=Get-AtaraxiaThemePalette 'dark'
-    Set-AtaraxiaWpfThemeResources $window.Resources 'dark' $createBrush
+    $darkPalette=Get-AtaraxiaThemePalette $guiThemeDefinitions 'dark'
+    Set-AtaraxiaWpfThemeResources $window.Resources $darkPalette $createBrush
     $brushColor={param($Brush)'#'+$Brush.Color.ToString().Substring(3)}
     Assert-WpfControlTest ((& $brushColor $stop.Background) -eq $darkPalette.surface -and (& $brushColor $stop.Foreground) -eq $darkPalette.primary_text -and (& $brushColor $stop.BorderBrush) -eq $darkPalette.border) 'The generated stop input did not receive the dark theme resources.'
-    $lightPalette=Get-AtaraxiaThemePalette 'light'
-    Set-AtaraxiaWpfThemeResources $window.Resources 'light' $createBrush
+    $lightPalette=Get-AtaraxiaThemePalette $guiThemeDefinitions 'light'
+    Set-AtaraxiaWpfThemeResources $window.Resources $lightPalette $createBrush
     Assert-WpfControlTest ((& $brushColor $stop.Background) -eq $lightPalette.surface -and (& $brushColor $stop.Foreground) -eq $lightPalette.primary_text -and (& $brushColor $stop.BorderBrush) -eq $lightPalette.border) 'The generated stop input did not follow a later light theme switch.'
 
     $conversationControl=$window.FindName('Conversation')

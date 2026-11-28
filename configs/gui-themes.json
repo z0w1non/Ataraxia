@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "themes": {
+    "light": {
+      "app_background": "#F5F5F5",
+      "surface": "#FFFFFF",
+      "panel": "#E8E8E8",
+      "drawer": "#EEEEEE",
+      "primary_text": "#171717",
+      "secondary_text": "#505050",
+      "border": "#B8B8B8",
+      "accent": "#303030",
+      "accent_text": "#FFFFFF",
+      "icon": "#505050"
+    },
+    "dark": {
+      "app_background": "#171717",
+      "surface": "#242424",
+      "panel": "#303030",
+      "drawer": "#1D1D1D",
+      "primary_text": "#F5F5F5",
+      "secondary_text": "#C2C2C2",
+      "border": "#666666",
+      "accent": "#D0D0D0",
+      "accent_text": "#171717",
+      "icon": "#D0D0D0"
+    }
+  }
+}

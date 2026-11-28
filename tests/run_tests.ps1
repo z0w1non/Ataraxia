@@ -4,6 +4,7 @@ param([switch]$GuiIntegration)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$guiThemeDefinitions=Get-Content -LiteralPath (Join-Path $projectRoot 'configs/gui-themes.json') -Raw -Encoding UTF8|ConvertFrom-Json
 $previousUserDataDirectory=$env:ATARAXIA_USER_DATA_DIRECTORY
 $testUserDataDirectory=Join-Path ([IO.Path]::GetTempPath()) ('ataraxia-test-user-data-'+[guid]::NewGuid().ToString('N'))
 $env:ATARAXIA_USER_DATA_DIRECTORY=$testUserDataDirectory
@@ -281,13 +282,13 @@ Test-Case 'Optional GUI integration: theme changes update input and control colo
         $window.ShowInTaskbar=$false;$window.ShowActivated=$false;$window.Opacity=0
         $window.FindName('SettingsPanel').Visibility=[Windows.Visibility]::Visible;$window.Show()
         $createBrush={param($Hex)([Windows.Media.BrushConverter]::new()).ConvertFromString($Hex)}
-        Set-AtaraxiaWpfThemeResources $window.Resources 'dark' $createBrush
+        Set-AtaraxiaWpfThemeResources $window.Resources (Get-AtaraxiaThemePalette $guiThemeDefinitions 'dark') $createBrush
         $window.UpdateLayout();$runtimeInput=$window.FindName('RuntimeConfig');$modelInput=$window.FindName('ModelFileSelector')
         $brushColor={param($Brush)'#'+$Brush.Color.ToString().Substring(3)}
-        Assert-True ((& $brushColor $runtimeInput.Background) -eq (Get-AtaraxiaThemePalette 'dark').surface -and (& $brushColor $runtimeInput.Foreground) -eq (Get-AtaraxiaThemePalette 'dark').primary_text -and (& $brushColor $modelInput.Background) -eq (Get-AtaraxiaThemePalette 'dark').surface) 'Dark theme did not apply readable surface and text colors to the main text and selection controls.'
+        Assert-True ((& $brushColor $runtimeInput.Background) -eq (Get-AtaraxiaThemePalette $guiThemeDefinitions 'dark').surface -and (& $brushColor $runtimeInput.Foreground) -eq (Get-AtaraxiaThemePalette $guiThemeDefinitions 'dark').primary_text -and (& $brushColor $modelInput.Background) -eq (Get-AtaraxiaThemePalette $guiThemeDefinitions 'dark').surface) 'Dark theme did not apply readable surface and text colors to the main text and selection controls.'
         $darkBorder=$runtimeInput.BorderBrush.Color.ToString();$darkTrack=$window.Resources['BorderBrush'].Color.ToString()
-        Set-AtaraxiaWpfThemeResources $window.Resources 'light' $createBrush;$window.UpdateLayout()
-        Assert-True ((& $brushColor $runtimeInput.Background) -eq (Get-AtaraxiaThemePalette 'light').surface -and (& $brushColor $runtimeInput.Foreground) -eq (Get-AtaraxiaThemePalette 'light').primary_text -and $darkBorder -ne $runtimeInput.BorderBrush.Color.ToString() -and $darkTrack -ne $window.Resources['BorderBrush'].Color.ToString()) 'Input controls or shared component resources retained stale colors after a theme change.'
+        Set-AtaraxiaWpfThemeResources $window.Resources (Get-AtaraxiaThemePalette $guiThemeDefinitions 'light') $createBrush;$window.UpdateLayout()
+        Assert-True ((& $brushColor $runtimeInput.Background) -eq (Get-AtaraxiaThemePalette $guiThemeDefinitions 'light').surface -and (& $brushColor $runtimeInput.Foreground) -eq (Get-AtaraxiaThemePalette $guiThemeDefinitions 'light').primary_text -and $darkBorder -ne $runtimeInput.BorderBrush.Color.ToString() -and $darkTrack -ne $window.Resources['BorderBrush'].Color.ToString()) 'Input controls or shared component resources retained stale colors after a theme change.'
     } finally { if($null -ne $window){$window.Close()} }
 }
 Test-Case 'Optional GUI integration: closing a preset name input cancels without closing the owner' {
@@ -319,11 +320,11 @@ Test-Case 'Optional GUI integration: model parameter spinner updates numeric inp
         $controls=New-AtaraxiaWpfModelParameterControls $panel @(Get-AtaraxiaModelParameterDefinitions) $values $port $window {param($Key)$Key} $handlers.on_dirty $handlers.on_save ${function:Get-AtaraxiaModelParameterInputResult} ${function:Get-AtaraxiaModelParameterStepValue}
         $panel.UpdateLayout()
         $createBrush={param($Hex)([Windows.Media.BrushConverter]::new()).ConvertFromString($Hex)}
-        Set-AtaraxiaWpfThemeResources $window.Resources 'dark' $createBrush;$panel.UpdateLayout()
-        $stopInput=$controls.stop;$darkPalette=Get-AtaraxiaThemePalette 'dark'
+        Set-AtaraxiaWpfThemeResources $window.Resources (Get-AtaraxiaThemePalette $guiThemeDefinitions 'dark') $createBrush;$panel.UpdateLayout()
+        $stopInput=$controls.stop;$darkPalette=Get-AtaraxiaThemePalette $guiThemeDefinitions 'dark'
         $brushColor={param($Brush)'#'+$Brush.Color.ToString().Substring(3)}
         Assert-True ((& $brushColor $stopInput.Background) -eq $darkPalette.surface -and (& $brushColor $stopInput.Foreground) -eq $darkPalette.primary_text -and (& $brushColor $stopInput.BorderBrush) -eq $darkPalette.border) 'Stop parameter input colors do not match the active dark palette.'
-        Set-AtaraxiaWpfThemeResources $window.Resources 'light' $createBrush;$panel.UpdateLayout();$lightPalette=Get-AtaraxiaThemePalette 'light'
+        Set-AtaraxiaWpfThemeResources $window.Resources (Get-AtaraxiaThemePalette $guiThemeDefinitions 'light') $createBrush;$panel.UpdateLayout();$lightPalette=Get-AtaraxiaThemePalette $guiThemeDefinitions 'light'
         Assert-True ((& $brushColor $stopInput.Background) -eq $lightPalette.surface -and (& $brushColor $stopInput.Foreground) -eq $lightPalette.primary_text -and (& $brushColor $stopInput.BorderBrush) -eq $lightPalette.border) 'Stop parameter input did not follow a later theme switch.'
         $temperature=$controls.temperature;$temperatureSlider=$temperature.Tag;$temperatureUp=$temperatureSlider.Tag.increase_button;$temperatureDown=$temperatureSlider.Tag.decrease_button
         Assert-True ([Windows.Automation.AutomationProperties]::GetName($temperatureUp) -eq [string]$temperatureUp.ToolTip -and [Windows.Automation.AutomationProperties]::GetName($temperatureDown) -eq [string]$temperatureDown.ToolTip) 'Model parameter spinner icons do not expose their localized tooltip as the UI Automation name.'
@@ -855,6 +856,15 @@ Test-Case 'GUI themes provide modern portable light and dark palettes' {
     . (Join-Path (Join-Path $projectRoot 'scripts') 'GuiThemeApplication.ps1')
     $themeSource=Get-Content (Join-Path $projectRoot 'scripts/GuiTheme.ps1') -Raw
     Assert-True ($themeSource -notmatch 'HKCU:|Get-ItemProperty') 'GUI theme application model reads the Windows registry directly.'
+    Assert-True ($themeSource -notmatch '#[0-9A-Fa-f]{6}') 'GUI theme color values remain hard-coded in the theme model instead of the JSON palette.'
+    $themeJson=Read-Json (Join-Path $projectRoot 'configs/gui-themes.json')
+    Assert-True ([int]$themeJson.schema_version -eq 1 -and ((@($themeJson.themes.PSObject.Properties.Name|Sort-Object)) -join ',') -ceq 'dark,light') 'Theme palette JSON does not contain the versioned light/dark structure.'
+    $invalidThemeJson=Read-Json (Join-Path $projectRoot 'configs/gui-themes.json');$invalidThemeJson.themes.light.surface='white';$invalidThemeRejected=$false
+    try{$null=Get-AtaraxiaThemePalette $invalidThemeJson 'light'}catch{$invalidThemeRejected=$true}
+    Assert-True $invalidThemeRejected 'A malformed JSON theme color was accepted.'
+    $unexpectedThemeJson=Read-Json (Join-Path $projectRoot 'configs/gui-themes.json');Add-Member -InputObject $unexpectedThemeJson -MemberType NoteProperty -Name unexpected -Value $true;$unexpectedThemeRejected=$false
+    try{$null=Get-AtaraxiaThemePalette $unexpectedThemeJson 'dark'}catch{$unexpectedThemeRejected=$true}
+    Assert-True $unexpectedThemeRejected 'An unknown root property in the theme JSON was accepted.'
     . (Join-Path $projectRoot 'scripts/adapters/WindowsSystemThemeAdapter.ps1')
     $readPreference={0};Assert-True ((Get-AtaraxiaWindowsSystemTheme $readPreference) -eq 'dark') 'Windows system theme adapter did not map the dark preference.'
     $readPreference={1};Assert-True ((Get-AtaraxiaWindowsSystemTheme $readPreference) -eq 'light') 'Windows system theme adapter did not map the light preference.'
@@ -863,8 +873,9 @@ Test-Case 'GUI themes provide modern portable light and dark palettes' {
     $config=Read-Json (Join-Path $projectRoot 'configs/config.example.json')
     Assert-True ($config.gui_theme -eq 'system') 'System theme is not the default preference.'
     foreach($mode in @('light','dark')){
-        $palette=Get-AtaraxiaThemePalette $mode
+        $palette=Get-AtaraxiaThemePalette $guiThemeDefinitions $mode
         foreach($property in $palette.PSObject.Properties){$rgb=[string]$property.Value;if($rgb -notmatch '^#[0-9A-Fa-f]{6}$'){throw "Theme color is not a portable hex color: $mode/$($property.Name)=$rgb"}}
+        foreach($property in $palette.PSObject.Properties){$color=[string]$property.Value;Assert-True ($color.Substring(1,2) -eq $color.Substring(3,2) -and $color.Substring(3,2) -eq $color.Substring(5,2)) "Theme color is not achromatic: $mode/$($property.Name)=$color"}
         $contrast=Get-AtaraxiaContrastRatio $palette.primary_text $palette.app_background
         Assert-True ($contrast -ge 7) "Theme text contrast is too low: $mode/$contrast"
         $surfaceContrast=Get-AtaraxiaContrastRatio $palette.primary_text $palette.surface
@@ -891,8 +902,9 @@ Test-Case 'GUI themes provide modern portable light and dark palettes' {
     $failedPersist={param($Preference)throw 'disk full'};$saveRejected=$false
     try{$null=Invoke-AtaraxiaGuiThemePreferenceSave $same.state 'dark' 'light' $failedPersist}catch{$saveRejected=$_.Exception.Message -match 'disk full'}
     Assert-True ($saveRejected -and $same.state.preference -eq 'light' -and $same.state.effective -eq 'light') 'A failed theme persistence changed the committed theme state or hid the storage error.'
-    . (Join-Path $projectRoot 'scripts/adapters/WpfThemeAdapter.ps1');$resources=@{};$brushFactory={param($Color)[pscustomobject]@{color=$Color}};Set-AtaraxiaWpfThemeResources $resources 'dark' $brushFactory
-    Assert-True ($resources.AppBackgroundBrush.color -eq (Get-AtaraxiaThemePalette 'dark').app_background -and $resources.PrimaryTextBrush.color -eq (Get-AtaraxiaThemePalette 'dark').primary_text -and $resources.IconBrush.color -eq (Get-AtaraxiaThemePalette 'dark').icon -and $resources.Count -eq 10) 'Theme adapter did not map the pure palette to all UI resource keys.'
+    . (Join-Path $projectRoot 'scripts/adapters/WpfThemeAdapter.ps1');$resources=@{};$brushFactory={param($Color)[pscustomobject]@{color=$Color}};Set-AtaraxiaWpfThemeResources $resources (Get-AtaraxiaThemePalette $guiThemeDefinitions 'dark') $brushFactory
+    Assert-True ($resources.AppBackgroundBrush.color -eq (Get-AtaraxiaThemePalette $guiThemeDefinitions 'dark').app_background -and $resources.PrimaryTextBrush.color -eq (Get-AtaraxiaThemePalette $guiThemeDefinitions 'dark').primary_text -and $resources.IconBrush.color -eq (Get-AtaraxiaThemePalette $guiThemeDefinitions 'dark').icon -and $resources.Count -eq 10) 'Theme adapter did not map the pure palette to all UI resource keys.'
+    $missingPaletteRejected=$false;try{Set-AtaraxiaWpfThemeResources @{} ([pscustomobject]@{surface='#FFFFFF'}) $brushFactory}catch{$missingPaletteRejected=$true};Assert-True $missingPaletteRejected 'WPF theme adapter accepted an incomplete palette.'
     $modelAdapter=Get-Content (Join-Path $projectRoot 'scripts/adapters/WpfModelParameterAdapter.ps1') -Raw
     $dialogAdapter=Get-Content (Join-Path $projectRoot 'scripts/adapters/WpfDialogAdapter.ps1') -Raw
     $drawerAdapter=Get-Content (Join-Path $projectRoot 'scripts/adapters/WpfProjectDrawerAdapter.ps1') -Raw
@@ -1103,7 +1115,7 @@ Assert-True ($gui -match 'ProjectDrawer' -and $gui -notmatch 'ProjectSelector|Sw
     $guiApplication=Get-Content -Raw (Join-Path $projectRoot 'scripts/GuiApplication.ps1')
     Assert-True ($guiApplication -match 'Resolve-AtaraxiaGuiSessionTaskPath' -and $guiApplication -match 'Get-AtaraxiaGuiProcessUpdate' -and $guiApplication -notmatch 'Windows\.(Controls|Media|Visibility)') 'GUI application logic is coupled to WPF instead of being independently testable.'
     Assert-True ($gui -match 'ThemeSelector' -and $gui -match 'Apply-AtaraxiaTheme' -and $gui -match 'Get-AtaraxiaWindowsSystemTheme') 'GUI does not provide system, light, and dark theme selection.'
-    $themeAdapter=Get-Content -Raw (Join-Path $projectRoot 'scripts/adapters/WpfThemeAdapter.ps1');$guiComposition=Get-Content -Raw (Join-Path $projectRoot 'scripts/Start-AtaraxiaGui.ps1');Assert-True ($themeAdapter -match 'Set-AtaraxiaWpfThemeResources' -and $themeAdapter -notmatch 'Windows\.(Media|Controls)' -and $guiComposition -match 'Set-AtaraxiaWpfThemeResources \$window\.Resources' -and $guiComposition -notmatch '\$keys=@\{app_background=') 'Theme resource mapping remains in the GUI composition root instead of its adapter.'
+    $themeAdapter=Get-Content -Raw (Join-Path $projectRoot 'scripts/adapters/WpfThemeAdapter.ps1');$guiComposition=Get-Content -Raw (Join-Path $projectRoot 'scripts/Start-AtaraxiaGui.ps1');Assert-True ($themeAdapter -match 'Set-AtaraxiaWpfThemeResources' -and $themeAdapter -notmatch 'Windows\.(Media|Controls)' -and $guiComposition -match 'Set-AtaraxiaWpfThemeResources \$window\.Resources' -and $guiComposition -match 'Get-AtaraxiaThemePalette \$script:guiThemeDefinitions' -and $guiComposition -match 'configs/gui-themes\.json' -and $guiComposition -notmatch '\$keys=@\{app_background=') 'Theme resource mapping remains in the GUI composition root instead of its adapter.'
     Assert-True ($gui -match 'KoboldToggle' -and $gui -match 'KoboldStatusDot' -and $gui -match 'Start-KoboldCppFromGui' -and $gui -match 'Stop-KoboldCppFromGui' -and $gui -match 'Get-KoboldCppLaunchArguments' -and $gui -match '#555555' -and $gui -match '#BBBBBB') 'GUI does not launch/stop KoboldCpp and color its API connection state.'
     Assert-True ($gui -match 'Start-KoboldCppAcquisitionIfMissing' -and $gui -match 'Test-AtaraxiaStoreFile \$executable \$script:guiJsonFileStore' -and $gui -match 'Initialize-KoboldCpp\.ps1' -and $gui -match 'RedirectStandardOutput' -and $gui -match 'Complete-KoboldCppAcquisitionIfFinished') 'GUI does not acquire a missing KoboldCpp executable asynchronously through the separate initializer.'
     $modelFileAdapter=Get-Content -Raw (Join-Path $projectRoot 'scripts/adapters/ModelFileSystemAdapter.ps1');Assert-True ($gui -match 'ModelFileSelector' -and $gui -match 'Get-AtaraxiaAvailableModels' -and $gui -match 'Save-AtaraxiaSelectedModel' -and $gui -match 'Get-KoboldCppEffectiveSettings' -and $gui -match 'Save-KoboldCppSettings' -and $gui -match 'Get-AtaraxiaModelFiles \$directory \$dependencies' -and $gui -notmatch "-Filter '\*\.gguf' -Recurse" -and $gui -notmatch 'Get-KoboldCppModelSettings|ChangeExtension\(\$ModelPath' -and $gui -match 'Save-AtaraxiaModelParameterPresetAs' -and $gui -match 'Rename-AtaraxiaCurrentModelParameterPreset' -and $gui -match 'Remove-AtaraxiaCurrentModelParameterPreset' -and $modelFileAdapter -match 'function Get-AtaraxiaModelFiles' -and $modelFileAdapter -match 'ReparsePoint' -and $gui -match 'Set-AtaraxiaModelParameterEditorLoading.*\$true;try\{Refresh-AtaraxiaModelSelector\}') 'GUI does not discover local GGUF files through the injectable adapter or manage shared parameter presets without sidecar settings.'
@@ -1926,9 +1938,12 @@ Test-Case 'Stopped agent run restores workspace diffs and prior task state' {
 
 Test-Case 'Documentation uses Ataraxia and domain independent requirements' {
     $readme=Get-Content -LiteralPath (Join-Path $projectRoot 'README.md') -Raw -Encoding UTF8
+    $englishReadmePath=Join-Path $projectRoot 'README/en/README.md'
+    Assert-True (Test-Path -LiteralPath $englishReadmePath -PathType Leaf) 'English README is not stored in its language folder.'
+    $englishReadme=Get-Content -LiteralPath $englishReadmePath -Raw -Encoding UTF8
     $spec=Get-Content -LiteralPath (Join-Path $projectRoot 'docs/SPECIFICATION.md') -Raw -Encoding UTF8
     $policy=Get-Content -LiteralPath (Join-Path $projectRoot 'AGENTS.md') -Raw -Encoding UTF8
-    Assert-True ($readme.StartsWith('# Ataraxia') -and $readme -match 'Invoke-Agent\.ps1') 'README does not describe Ataraxia generic CLI.'
+    Assert-True ($readme -match '^<!-- 日本語版.*README/en/README\.md' -and $readme -match 'Invoke-Agent\.ps1' -and $englishReadme -match '^<!-- English version.*README\.md') 'Japanese and English README files or their language switch links are missing.'
     Assert-True ($spec -match '特定のドメインに限定しない' -and $spec -notmatch 'Invoke-NovelWriter') 'Specification retains domain-specific workflow assumptions.'
     Assert-True ($spec.StartsWith('# Ataraxia 技術仕様書') -and $spec -notmatch '(?m)^## (Purpose|Entry points|Domain-independent workflow|Workspace changes and commands|Context and local resource assumptions|Reports and GUI behavior|Configuration and dependencies|Development requirements)$') 'Technical specification prose and section headings are not Japanese.'
     Assert-True ($spec -match '(?m)^## 用語定義\r?$' -and $spec -match '\| 用語 \| 定義 \| 対応する識別子・保存先 \| 表記規則 \|' -and $spec -match '\| セッション \|' -and $spec -match '\| 作業対象 \|' -and $spec -match '\| ワークフロー段階 \|') 'Project terminology and canonical usage are not defined in a table after the overview.'
@@ -1939,7 +1954,7 @@ Test-Case 'Documentation uses Ataraxia and domain independent requirements' {
     Assert-True ($policy -match 'UTF-8 BOM' -and $policy -match 'Windows PowerShell 5\.1') 'Agent development instructions do not preserve PowerShell 5.1 script encoding compatibility.'
     Assert-True ($policy -match 'ウィンドウの可視性' -and $policy -match '成功扱いにせず' -and $policy -match '対話可能なWindowsデスクトップで再検証する') 'Agent development instructions do not define how to handle GUI integration failures caused by the host desktop.'
     Assert-True ($spec -match '(?m)^## 設計原則と段階的再設計\r?$' -and $spec -match '高凝集' -and $spec -match '依存性逆転' -and $spec -match 'composition root' -and $spec -match '大規模な一括書き換えを避ける') 'Architecture policy is missing abstraction, cohesion, dependency inversion, composition, or incremental migration rules.'
-    foreach($jsonContract in @('config.example.json','koboldcpp-settings.json','agent-harness.json','role-contracts.json','gui-dialog-contracts.json','project.json','session.json','conversation.json','request-transaction.json','state.json','run-changes.json','.task.json','sysprompt/*.json','ja.json','en.json','startup_parameters','request_parameters','response_format','history_entry')){Assert-True ($spec.Contains($jsonContract)) "Technical specification JSON catalog is missing a structure: $jsonContract"}
+    foreach($jsonContract in @('config.example.json','koboldcpp-settings.json','agent-harness.json','role-contracts.json','gui-dialog-contracts.json','gui-themes.json','project.json','session.json','conversation.json','request-transaction.json','state.json','run-changes.json','.task.json','sysprompt/*.json','ja.json','en.json','startup_parameters','request_parameters','response_format','history_entry')){Assert-True ($spec.Contains($jsonContract)) "Technical specification JSON catalog is missing a structure: $jsonContract"}
     Assert-True ($policy -match '高凝集・疎結合' -and $policy -match '依存性逆転' -and $policy -match 'Composition root' -and $policy -match '縦切り') 'Contributor instructions do not enforce the project architecture principles.'
     $architecturePath=Join-Path $projectRoot 'docs/ARCHITECTURE_REDESIGN.md'
     Assert-True (Test-Path -LiteralPath $architecturePath -PathType Leaf) 'Architecture redesign map is missing.'

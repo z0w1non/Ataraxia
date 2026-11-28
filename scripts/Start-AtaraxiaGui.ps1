@@ -43,6 +43,8 @@ $script:guiNavigationState=New-AtaraxiaGuiNavigationState
 . (Join-Path $PSScriptRoot 'AgentCore.ps1')
 . (Join-Path $PSScriptRoot 'SessionStore.ps1')
 . (Join-Path $PSScriptRoot 'GuiTheme.ps1')
+$themeDefinitionsPath=Join-Path $projectRoot 'configs/gui-themes.json'
+$script:guiThemeDefinitions=[IO.File]::ReadAllText($themeDefinitionsPath,[Text.Encoding]::UTF8)|ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'adapters/WindowsSystemThemeAdapter.ps1')
 . (Join-Path $PSScriptRoot 'GuiModelParameters.ps1')
 . (Join-Path $PSScriptRoot 'GuiModelParameterEditorState.ps1')
@@ -174,7 +176,7 @@ function Set-AtaraxiaLanguage([string]$Language) {
     Set-KoboldToggleIcon;Set-RunTaskIcon $false
 }
 function Apply-AtaraxiaTheme([string]$Mode) {
-    Set-AtaraxiaWpfThemeResources $window.Resources $Mode $script:createThemeBrush
+    $palette=Get-AtaraxiaThemePalette $script:guiThemeDefinitions $Mode;Set-AtaraxiaWpfThemeResources $window.Resources $palette $script:createThemeBrush
 }
 function Load-AtaraxiaThemePreference {
     try{$settings=Get-AtaraxiaConfig;$mode=[string]$settings.gui_theme;if($mode -notin @('system','light','dark')){$mode='system'}}catch{$mode='system'}
