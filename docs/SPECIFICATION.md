@@ -1,6 +1,6 @@
 # Ataraxia 技術仕様書
 
-READMEはルートの日本語版 [`README.md`](../README.md) と英語版 [`README/en/README.md`](../README/en/README.md) を用意し、各ファイル冒頭のリンクから切り替える。ルートREADMEを日本語の正規入口とし、他言語版は言語フォルダーへ配置する。
+READMEはルートの日本語版 [`README.md`](../README.md) と英語版 [`README/en/README.md`](README/en/README.md) を用意し、冒頭に全言語版へのリンクを示す。表示中の言語は通常のテキスト、他言語版はリンクで表す。ルートREADMEを日本語の正規入口とし、他言語版は `docs/README/<language>/` に配置する。
 
 GUIの会話表示モデルはWPFやfilesystemに依存せず、会話・実行状態と、Composition側で読み込んだロールアイコンgeometryを受け取って表示用項目へ変換する。固定ラベル、ツールチップ、メニュー文言、テーマ選択肢は `GuiLocalizedPresentation.ps1` が翻訳済みの中立な表示データとして返す。WPF View Adapterは表示キーと `Text` / `ToolTip` 等の具体プロパティの対応だけを行い、ContextMenu Adapterも完成済みの文言を受け取る。会話／設定ページとプロジェクトドロワーの表示状態は `GuiNavigationState.ps1` の画面非依存状態モデルで解決し、WPFイベントはアクションを渡し、返された真偽値をView Port経由で各画面へ反映する。タスクパス、編集状態、保留中プロジェクト、ドロワー展開状態は `GuiScreenState.ps1` の明示モデルに集約し、タスクの読み込みとリセットをモデル遷移として扱う。モデル設定欄のloading／dirty／initialized状態は `GuiModelParameterEditorState.ps1` が保持し、プログラムによるモデル一覧更新中に選択イベントを無視する条件と、保存成功時のdirty解除をWPFなしで検証する。GUIエージェント実行の状態遷移、標準出力カーソル、現在のロール、終了コードは `GuiProcessState.ps1` が保持する。`GuiProcessApplication.ps1` は出力ファイル読取Adapterから差分を受け取り、ロール表示、標準エラー表示、終了時の状態解除と一覧更新要否を返す。実行・ロールバックの起動要求を構成し、`PowerShellGuiProcessAdapter.ps1` がPowerShell子プロセスの開始、状態確認、停止、終了、同期実行を担う。標準出力・標準エラーの読み書き・削除は別の出力Adapterに置く。SVG geometry parserはSVG XML文字列を入力値として扱い、ファイル読込はGUI Composition側が担当する。GUIテーマは希望設定（system/light/dark）と実効テーマ（light/dark）を別々に保持し、headless state modelが変更の受理とpalette再適用の要否を決定する。session selectorのプログラム同期状態もheadless modelで管理し、イベントhandlerはその状態を確認してユーザー選択だけをApplication use caseへ渡す。
 

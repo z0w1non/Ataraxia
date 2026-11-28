@@ -1,4 +1,4 @@
-﻿<!-- English version. 日本語: [README.md](../../README.md) -->
+Languages: [日本語](../../README.md) | English
 
 # Ataraxia
 

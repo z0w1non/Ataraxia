@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param([switch]$GuiIntegration)
 
 Set-StrictMode -Version Latest
@@ -1938,12 +1938,12 @@ Test-Case 'Stopped agent run restores workspace diffs and prior task state' {
 
 Test-Case 'Documentation uses Ataraxia and domain independent requirements' {
     $readme=Get-Content -LiteralPath (Join-Path $projectRoot 'README.md') -Raw -Encoding UTF8
-    $englishReadmePath=Join-Path $projectRoot 'README/en/README.md'
+    $englishReadmePath=Join-Path $projectRoot 'docs/README/en/README.md'
     Assert-True (Test-Path -LiteralPath $englishReadmePath -PathType Leaf) 'English README is not stored in its language folder.'
     $englishReadme=Get-Content -LiteralPath $englishReadmePath -Raw -Encoding UTF8
     $spec=Get-Content -LiteralPath (Join-Path $projectRoot 'docs/SPECIFICATION.md') -Raw -Encoding UTF8
     $policy=Get-Content -LiteralPath (Join-Path $projectRoot 'AGENTS.md') -Raw -Encoding UTF8
-    Assert-True ($readme -match '^<!-- 日本語版.*README/en/README\.md' -and $readme -match 'Invoke-Agent\.ps1' -and $englishReadme -match '^<!-- English version.*README\.md') 'Japanese and English README files or their language switch links are missing.'
+    Assert-True ($readme -match '(?m)^言語: 日本語 \| \[English\]\(docs/README/en/README\.md\)\r?$' -and $readme -match 'Invoke-Agent\.ps1' -and $englishReadme -match '(?m)^Languages: \[日本語\]\(../../README\.md\) \| English\r?$') 'Japanese and English README files or their language switch links are missing.'
     Assert-True ($spec -match '特定のドメインに限定しない' -and $spec -notmatch 'Invoke-NovelWriter') 'Specification retains domain-specific workflow assumptions.'
     Assert-True ($spec.StartsWith('# Ataraxia 技術仕様書') -and $spec -notmatch '(?m)^## (Purpose|Entry points|Domain-independent workflow|Workspace changes and commands|Context and local resource assumptions|Reports and GUI behavior|Configuration and dependencies|Development requirements)$') 'Technical specification prose and section headings are not Japanese.'
     Assert-True ($spec -match '(?m)^## 用語定義\r?$' -and $spec -match '\| 用語 \| 定義 \| 対応する識別子・保存先 \| 表記規則 \|' -and $spec -match '\| セッション \|' -and $spec -match '\| 作業対象 \|' -and $spec -match '\| ワークフロー段階 \|') 'Project terminology and canonical usage are not defined in a table after the overview.'

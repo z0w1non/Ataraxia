@@ -1,4 +1,4 @@
-<!-- 日本語版を表示しています。English: [README/en/README.md](README/en/README.md) -->
+言語: 日本語 | [English](docs/README/en/README.md)
 
 # Ataraxia
 
