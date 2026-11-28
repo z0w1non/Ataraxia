@@ -28,6 +28,7 @@ $script:guiInstance=Enter-AtaraxiaGuiInstance (Get-AtaraxiaGuiInstanceIdentity $
 if(-not $script:guiInstance.is_primary){exit 0}
 . (Join-Path $PSScriptRoot 'Localization.ps1')
 . (Join-Path $PSScriptRoot 'ConversationStore.ps1')
+. (Join-Path $PSScriptRoot 'GuiRequestApplication.ps1')
 . (Join-Path $PSScriptRoot 'GuiConversationModel.ps1')
 . (Join-Path $PSScriptRoot 'GuiPresentationPort.ps1')
 . (Join-Path $PSScriptRoot 'GuiScreenState.ps1')
@@ -64,13 +65,14 @@ function New-AtaraxiaGuiProjectSessionAdapters {
     $listRecent={param($Root,$Maximum,$Reader)Get-AtaraxiaRecentSessions $Root $Maximum $script:guiSessionStore}.GetNewClosure()
     $projectExists={param($Path)(Test-AtaraxiaStorePath $Path 'Container' $script:guiJsonFileStore)}.GetNewClosure()
     $createProject={param($Root,$Name)New-AtaraxiaProject $Root $Name $script:guiJsonFileStore}.GetNewClosure()
+    $removeProject={param($Root,$Name)$path=Get-AtaraxiaProjectPath $Root $Name;if(-not [IO.Directory]::Exists($path)){return};$item=Get-AtaraxiaStoreItem $path $script:guiJsonFileStore;if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw "Project cleanup refuses to remove a reparse point: $path"};[IO.Directory]::Delete($path,$false)}.GetNewClosure()
     $renameProject={param($Root,$Old,$New)Rename-AtaraxiaProject $Root $Old $New $script:guiJsonFileStore}.GetNewClosure()
     $roleContracts=Import-RoleContracts (Get-AtaraxiaConfig) $RuntimeConfig.Text
     $createSession={param($Path,$Contracts,$Title)New-AtaraxiaSession $Path $Contracts $Title $script:guiSessionStore}.GetNewClosure()
     $renameSession={param($Path,$Title,$Source)Set-AtaraxiaSessionTitle $Path $Title $Source $script:guiSessionStore}.GetNewClosure()
     $configPath=[IO.Path]::GetFullPath($RuntimeConfig.Text);$projectsRoot=Get-ProjectsRoot
     $activate={param($Name)$null=Set-AtaraxiaActiveProject $configPath $projectsRoot $Name $script:guiSessionStore}.GetNewClosure()
-    $dependencies=New-AtaraxiaGuiProjectSessionDependencies $listProjects $resolvePath $listSessions $listRecent $projectExists $createProject $renameProject $createSession $renameSession $activate
+    $dependencies=New-AtaraxiaGuiProjectSessionDependencies $listProjects $resolvePath $listSessions $listRecent $projectExists $createProject $renameProject $createSession $renameSession $activate $removeProject
     $dependencies|Add-Member -NotePropertyName json_reader -NotePropertyValue $guiReadJson
     return $dependencies
 }
@@ -148,6 +150,12 @@ $script:guiJsonFileSystem=New-AgentJsonFileSystemPort
 function Read-AtaraxiaGuiJsonFile([string]$Path,[long]$MaximumBytes=4194304) { Read-AgentJsonFile $Path $MaximumBytes {param($Proposal,$FileSystem)Invoke-AtaraxiaGuiJsonRepair $Proposal $FileSystem} $script:guiJsonFileSystem }
 $script:guiJsonStore=New-AtaraxiaJsonFileStoreDependencies -ReadJson {param($Path,$MaximumBytes)Read-AtaraxiaGuiJsonFile $Path $MaximumBytes}
 $script:guiJsonFileStore=$script:guiJsonStore
+$requestReadJson={param($Path)Read-AtaraxiaGuiJsonFile $Path}.GetNewClosure()
+$requestWriteJson={param($Path,$Value)Write-AtaraxiaJsonStoreFile $Path $Value $script:guiJsonStore 100}.GetNewClosure()
+$requestTestFile={param($Path)Test-AtaraxiaJsonStoreFile $Path $script:guiJsonFileStore}.GetNewClosure()
+$requestRemoveFile={param($Path)if(-not [IO.File]::Exists($Path)){return};$item=Get-Item -LiteralPath $Path -Force;if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw "Request rollback refuses to remove a reparse point: $Path"};[IO.File]::Delete($Path)}.GetNewClosure()
+$requestClock={return [DateTime]::UtcNow}.GetNewClosure()
+$script:guiRequestPersistence=New-AtaraxiaGuiRequestPersistenceDependencies $requestReadJson $requestWriteJson $requestTestFile $requestRemoveFile $requestClock
 function Show-AtaraxiaInputDialog([string]$Title,[string]$InitialValue='',[string]$Message='') { Invoke-AtaraxiaGuiDialogService $script:guiDialogService input @($Title,$InitialValue,$Message) }
 function Show-AtaraxiaMultilineDialog([string]$Title,[string]$InitialValue='',[string]$Message='') { Invoke-AtaraxiaGuiDialogService $script:guiDialogService multiline @($Title,$InitialValue,$Message) }
 function Show-AtaraxiaProjectNameDialog([string]$Title,[string]$InitialValue='') { Invoke-AtaraxiaGuiDialogService $script:guiDialogService project_name @($Title,$InitialValue) }
@@ -548,9 +556,9 @@ function Start-AtaraxiaProcess {
     Assert-AgentPlainText $cleanRequest 'User query' -MaximumLength 100000 -AllowMultiline
     if(-not [string]::IsNullOrWhiteSpace($script:guiScreenState.pending_session_project)){$null=Materialize-AtaraxiaPendingSession $cleanRequest}
     if([string]::IsNullOrWhiteSpace($script:guiScreenState.task_path)){throw 'Select or create a session before sending a query.'}
-    $conversationPath=Join-Path (Split-Path -Parent $script:guiScreenState.task_path) 'conversation.json';if($ReplaceLatest){$null=Add-AtaraxiaRequest $conversationPath $cleanRequest -ReplaceLatest}else{$null=Add-AtaraxiaRequest $conversationPath $cleanRequest}
-    $task=Read-AtaraxiaGuiJsonFile $script:guiScreenState.task_path;$task.goal=$cleanRequest;Write-AtaraxiaJsonStoreFile $script:guiScreenState.task_path $task $script:guiJsonStore 100
-    Touch-AtaraxiaSession (Split-Path -Parent $script:guiScreenState.task_path);$script:guiScreenState.editing=$false;$Goal.Clear();Refresh-AtaraxiaConversation;Refresh-AtaraxiaSessionSelector;Refresh-ProjectSessionTree
+    $sessionDirectory=Split-Path -Parent $script:guiScreenState.task_path;$conversationPath=Join-Path $sessionDirectory 'conversation.json';$metadataPath=Join-Path $sessionDirectory 'session.json'
+    $null=Save-AtaraxiaGuiRequestTransaction $script:guiScreenState.task_path $metadataPath $conversationPath $cleanRequest $script:guiRequestPersistence -ReplaceLatest:$ReplaceLatest
+    $script:guiScreenState.editing=$false;$Goal.Clear();Refresh-AtaraxiaConversation;Refresh-AtaraxiaSessionSelector;Refresh-ProjectSessionTree
     $runner=Join-Path $PSScriptRoot 'Invoke-Agent.ps1';$hostPath=(Get-Process -Id $PID).Path;$outputPaths=New-AtaraxiaGuiProcessOutputPaths;$script:processStdout=$outputPaths.stdout;$script:processStderr=$outputPaths.stderr
     $launchRequest=New-AtaraxiaGuiAgentLaunchRequest $hostPath $runner $script:guiScreenState.task_path ([IO.Path]::GetFullPath($RuntimeConfig.Text)) $projectRoot $script:processStdout $script:processStderr
     $script:process=Start-AtaraxiaGuiChildProcess $launchRequest

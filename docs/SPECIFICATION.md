@@ -561,13 +561,18 @@ GUI は表示と入力イベントの結線を担当し、画面に依存しな�
 | `New-AgentHarnessDependencies` | `run_command` | allowlist 検証済み `ResolvedCommand`, 絶対パスの `WorkspaceDirectory` | `exit_code`, `timed_out`, `duration_ms`, `stdout`, `stderr` を持つ結果 |
 | `New-AtaraxiaSessionStoreDependencies` | `path_exists` | `Path` | ディレクトリが存在するかを表す真偽値 |
 | 同上 | `create_directory` | `Path`, `Force` | ディレクトリ作成。戻り値は使わない |
+| 同上 | `remove_directory` | `Path`, `EmptyOnly` | 作成途中で失敗した新規セッションディレクトリまたは新設した空の `sessions/` の補償削除 |
 | 同上 | `write_json` | `Path`, `Value` | セッション定義またはメタデータの保存 |
 | 同上 | `utc_now` | 引数なし | UTC の `DateTime` |
 | 同上 | `new_id` | 引数なし | 32 桁の16進数ID |
 
+GUIのユーザークエリ保存は `GuiRequestApplication.ps1` が `task.goal`、`session.json.updated_at`、`conversation.json.entries` を一つのApplication操作として調整する。`New-AtaraxiaGuiRequestPersistenceDependencies` のPortは `read_json(Path) -> object`、`write_json(Path, Value) -> void`、`test_file(Path) -> boolean`、`remove_file(Path) -> void`、`utc_now() -> DateTime`。先に3ファイルの現在値を読み、共通のUTC時刻を決めてから、タスク、セッションメタデータ、会話履歴の順に保存する。途中で失敗した場合は、失敗した書込みを含めて逆順に元値へ戻す。もともと存在しなかった会話ファイルは削除する。補償に失敗した場合は元の保存エラーと復元できなかったパスを報告する。会話ブランチの変換規則は `ConversationStore.ps1` の純粋関数で共有する。
+
 既定では会話ストアが JSON ファイルを原子的に更新し、ハーネスが検証済みコマンドを子プロセスとして起動し、セッションストアが一意なIDで必要なディレクトリと定義を作る。DI を使う単体テストでは、保存・時刻・ID生成・ディレクトリ作成・プロセス起動をメモリー上の偽物へ置き換え、会話の分岐、セッション定義、許可リスト境界、プロセス出力のサニタイズを OS や実ファイルに依存せず検証する。テストは `tests/run_tests.ps1` から実行する。
 
-セッション作成では、セッションディレクトリ、専用workspace、タスクJSON、メタデータJSONを一つの作成処理として扱う。途中で失敗した場合は、この処理が新規作成したセッションディレクトリを削除して部分状態を残さない。削除時は対象が `sessions/` の直下であることと、再解析点でないことを確認する。補償削除にも失敗した場合は、元の作成エラーと残存ディレクトリのパスを報告する。
+セッション作成では、セッションディレクトリ、専用workspace、タスクJSON、メタデータJSONを一つの作成処理として扱う。途中で失敗した場合は、この処理が新規作成したセッションディレクトリを削除し、セッションが一つもなかったために `sessions/` 自体も新設した場合は、それも空のときに限り削除する。削除時はセッション対象が `sessions/` の直下であることと、再解析点でないことを確認する。補償削除にも失敗した場合は、元の作成エラーと残存ディレクトリのパスを報告する。
+
+新しいプロジェクトを作成してから有効化または初回セッション作成に失敗した場合、その処理で作成した空のプロジェクトディレクトリを補償削除する。既存プロジェクトは削除しない。補償削除は空ディレクトリに限定し、失敗時は元のエラーと残存パスを報告する。
 
 許可コマンドの実行では、`AgentHarness.ps1` がコマンドと引数を検証した後に必須の ProcessRunner Portを呼ぶ。Portは入力が解決済みコマンドと絶対パスの作業ディレクトリであること、出力が整数終了コード・Booleanタイムアウト・非負の実行時間・文字列出力であることを検証する。`PowerShellProcessRunner.ps1` はOSプロセスAdapterであり、CLI Composition rootが明示的に結線する。AgentHarness内から直接プロセスを開始しない。
 

@@ -18,15 +18,15 @@ function New-AtaraxiaSessionDirectory([string]$Path,[object]$Dependencies,[switc
     New-Item -ItemType Directory -Force:$Force -Path $Path | Out-Null
 }
 
-function Remove-AtaraxiaCreatedSessionDirectory([string]$Path,[string]$SessionsRoot,[object]$Dependencies) {
+function Remove-AtaraxiaCreatedSessionDirectory([string]$Path,[string]$SessionsRoot,[object]$Dependencies,[switch]$EmptyOnly) {
     $root=[IO.Path]::GetFullPath($SessionsRoot).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)
     $target=[IO.Path]::GetFullPath($Path)
     if(-not $target.StartsWith($root+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw "Session cleanup target escaped its sessions directory: $target"}
-    if($null -ne $Dependencies -and $Dependencies.remove_directory -is [scriptblock]){& $Dependencies.remove_directory $target|Out-Null;return}
+    if($null -ne $Dependencies -and $Dependencies.remove_directory -is [scriptblock]){& $Dependencies.remove_directory $target ([bool]$EmptyOnly)|Out-Null;return}
     if(-not [IO.Directory]::Exists($target)){return}
     $item=Get-Item -LiteralPath $target -Force -ErrorAction Stop
     if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw "Session cleanup refuses to recurse through a reparse point: $target"}
-    [IO.Directory]::Delete($target,$true)
+    [IO.Directory]::Delete($target,(-not [bool]$EmptyOnly))
 }
 
 function Write-AtaraxiaSessionJson([string]$Path,[object]$Value,[object]$Dependencies) {
@@ -86,7 +86,7 @@ function Get-AtaraxiaRecentSessions([string]$ProjectsRoot,[int]$Maximum=5,[objec
 function New-AtaraxiaSession([string]$ProjectPath,[object]$RoleContracts,[string]$Title='New session',[object]$Dependencies=$null) {
     if(-not(Test-AtaraxiaSessionPath $ProjectPath $Dependencies)){throw "Project directory was not found: $ProjectPath"}
     $sessionsRoot=Get-AtaraxiaSessionsRoot $ProjectPath
-    New-AtaraxiaSessionDirectory $sessionsRoot $Dependencies -Force
+    $sessionsRootCreated=-not(Test-AtaraxiaSessionPath $sessionsRoot $Dependencies)
     $timestamp=Get-AtaraxiaSessionClock $Dependencies
     $guid=if($null -ne $Dependencies -and $Dependencies.new_id -is [scriptblock]){[string](& $Dependencies.new_id)}else{[guid]::NewGuid().ToString('N')}
     if($guid -notmatch '^[0-9a-fA-F]{32}$'){throw 'Session id provider must return 32 hexadecimal characters.'}
@@ -94,6 +94,7 @@ function New-AtaraxiaSession([string]$ProjectPath,[object]$RoleContracts,[string
     $sessionPath=Join-Path $sessionsRoot $sessionId
     $sessionDirectoryCreated=$false
     try{
+        New-AtaraxiaSessionDirectory $sessionsRoot $Dependencies -Force
         New-AtaraxiaSessionDirectory $sessionPath $Dependencies;$sessionDirectoryCreated=$true
         $workspace=Join-Path $sessionPath 'workspace';New-AtaraxiaSessionDirectory $workspace $Dependencies
         $task=Agent-NewTaskTemplate $sessionId $RoleContracts;$task.working_directory=$workspace;$task.goal=''
@@ -105,7 +106,10 @@ function New-AtaraxiaSession([string]$ProjectPath,[object]$RoleContracts,[string
         return $metadata
     }catch{
         $creationError=$_
-        if($sessionDirectoryCreated){try{Remove-AtaraxiaCreatedSessionDirectory $sessionPath $sessionsRoot $Dependencies}catch{throw [InvalidOperationException]::new("Session creation failed: $($creationError.Exception.Message). Cleanup also failed; inspect residual session directory '$sessionPath': $($_.Exception.Message)",$creationError.Exception)}}
+        $cleanupErrors=[System.Collections.Generic.List[string]]::new()
+        if($sessionDirectoryCreated){try{Remove-AtaraxiaCreatedSessionDirectory $sessionPath $sessionsRoot $Dependencies}catch{$cleanupErrors.Add("session directory '$sessionPath': $($_.Exception.Message)")}}
+        if($sessionsRootCreated -and $cleanupErrors.Count -eq 0){try{Remove-AtaraxiaCreatedSessionDirectory $sessionsRoot $ProjectPath $Dependencies -EmptyOnly}catch{$cleanupErrors.Add("sessions directory '$sessionsRoot': $($_.Exception.Message)")}}
+        if($cleanupErrors.Count -gt 0){throw [InvalidOperationException]::new("Session creation failed: $($creationError.Exception.Message). Cleanup also failed; inspect $($cleanupErrors -join '; ')",$creationError.Exception)}
         throw $creationError
     }
 }

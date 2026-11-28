@@ -60,9 +60,16 @@ function Build-AtaraxiaGuiProjectSessionOverview([string]$ProjectsRoot,[string]$
     return [pscustomobject][ordered]@{projects=$projects.ToArray();recent_sessions=$recentItems.ToArray()}
 }
 
-function New-AtaraxiaGuiProjectSessionDependencies([scriptblock]$ListProjects,[scriptblock]$ResolveProjectPath,[scriptblock]$ListSessions,[scriptblock]$ListRecentSessions,[scriptblock]$ProjectExists,[scriptblock]$CreateProject,[scriptblock]$RenameProject,[scriptblock]$CreateSession,[scriptblock]$RenameSession,[scriptblock]$ActivateProject) {
+function New-AtaraxiaGuiProjectSessionDependencies([scriptblock]$ListProjects,[scriptblock]$ResolveProjectPath,[scriptblock]$ListSessions,[scriptblock]$ListRecentSessions,[scriptblock]$ProjectExists,[scriptblock]$CreateProject,[scriptblock]$RenameProject,[scriptblock]$CreateSession,[scriptblock]$RenameSession,[scriptblock]$ActivateProject,[scriptblock]$RemoveProject=$null) {
     foreach($port in @($ListProjects,$ResolveProjectPath,$ListSessions,$ListRecentSessions,$ProjectExists,$CreateProject,$RenameProject,$CreateSession,$RenameSession,$ActivateProject)){if($port -isnot [scriptblock]){throw 'Project/session application dependencies must be explicit adapters.'}}
-    return [pscustomobject]@{list_projects=$ListProjects;resolve_project_path=$ResolveProjectPath;list_sessions=$ListSessions;list_recent_sessions=$ListRecentSessions;project_exists=$ProjectExists;create_project=$CreateProject;rename_project=$RenameProject;create_session=$CreateSession;rename_session=$RenameSession;activate_project=$ActivateProject}
+    if($null -ne $RemoveProject -and $RemoveProject -isnot [scriptblock]){throw 'Project cleanup dependency must be a script adapter.'}
+    return [pscustomobject]@{list_projects=$ListProjects;resolve_project_path=$ResolveProjectPath;list_sessions=$ListSessions;list_recent_sessions=$ListRecentSessions;project_exists=$ProjectExists;create_project=$CreateProject;rename_project=$RenameProject;create_session=$CreateSession;rename_session=$RenameSession;activate_project=$ActivateProject;remove_project=$RemoveProject}
+}
+
+function Remove-AtaraxiaGuiCreatedProject([object]$Dependencies,[string]$ProjectsRoot,[string]$ProjectName) {
+    $port=$Dependencies.PSObject.Properties['remove_project']
+    if($null -eq $port -or $port.Value -isnot [scriptblock]){throw "New project '$ProjectName' could not be removed because no cleanup adapter is configured; inspect '$ProjectsRoot\$ProjectName'."}
+    & $port.Value $ProjectsRoot $ProjectName|Out-Null
 }
 
 function Get-AtaraxiaGuiProjectSessionOverview([object]$Dependencies,[string]$ProjectsRoot,[string]$ActiveProjectName,[int]$RecentLimit) {
@@ -79,9 +86,16 @@ function Get-AtaraxiaGuiSessions([object]$Dependencies,[string]$ProjectPath) {
 function New-AtaraxiaGuiSessionForProject([object]$Dependencies,[string]$ProjectsRoot,[string]$ProjectName,[string]$ActiveProjectName,[object]$RoleContracts,[string]$Title='New session') {
     if($null -eq $Dependencies){throw 'Project/session application dependencies are required.'}
     $path=[string](& $Dependencies.resolve_project_path $ProjectsRoot $ProjectName)
-    if(-not [bool](& $Dependencies.project_exists $path)){& $Dependencies.create_project $ProjectsRoot $ProjectName|Out-Null}
-    if($ProjectName -ine $ActiveProjectName){& $Dependencies.activate_project $ProjectName|Out-Null}
-    $session=& $Dependencies.create_session $path $RoleContracts $Title
+    $created=-not [bool](& $Dependencies.project_exists $path)
+    if($created){& $Dependencies.create_project $ProjectsRoot $ProjectName|Out-Null}
+    try{
+        if($ProjectName -ine $ActiveProjectName){& $Dependencies.activate_project $ProjectName|Out-Null}
+        $session=& $Dependencies.create_session $path $RoleContracts $Title
+    }catch{
+        $operationError=$_
+        if($created){try{Remove-AtaraxiaGuiCreatedProject $Dependencies $ProjectsRoot $ProjectName}catch{throw [InvalidOperationException]::new("Project/session creation failed: $($operationError.Exception.Message). Project cleanup also failed: $($_.Exception.Message)",$operationError.Exception)}}
+        throw $operationError
+    }
     return [pscustomobject][ordered]@{project_name=$ProjectName;project_path=$path;session=$session;task_path=(Join-Path ([string]$session.path) ([string]$session.task_file))}
 }
 
@@ -91,7 +105,7 @@ function Prepare-AtaraxiaGuiProject([object]$Dependencies,[string]$ProjectsRoot,
     $created= -not [bool](& $Dependencies.project_exists $path)
     if($created){& $Dependencies.create_project $ProjectsRoot $ProjectName|Out-Null}
     $activated=($ProjectName -ine $ActiveProjectName)
-    if($activated){& $Dependencies.activate_project $ProjectName|Out-Null}
+    if($activated){try{& $Dependencies.activate_project $ProjectName|Out-Null}catch{$activationError=$_;if($created){try{Remove-AtaraxiaGuiCreatedProject $Dependencies $ProjectsRoot $ProjectName}catch{throw [InvalidOperationException]::new("Project activation failed: $($activationError.Exception.Message). Project cleanup also failed: $($_.Exception.Message)",$activationError.Exception)}};throw $activationError}}
     return [pscustomobject][ordered]@{project_name=$ProjectName;project_path=$path;created_project=$created;activated_project=$activated}
 }
 

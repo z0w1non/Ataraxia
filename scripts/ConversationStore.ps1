@@ -28,23 +28,25 @@ function Save-AtaraxiaConversation([string]$Path,[object]$Conversation,[object]$
     Write-AtaraxiaJsonStoreFile $Path $Conversation $null 40
 }
 
-function Add-AtaraxiaRequest([string]$Path,[string]$Body,[switch]$ReplaceLatest,[object]$Dependencies=$null) {
-    if ([string]::IsNullOrWhiteSpace($Body)) { throw 'Request must not be empty.' }
+function New-AtaraxiaRequestConversation([object]$Conversation,[string]$Body,[string]$Timestamp,[switch]$ReplaceLatest) {
+    if([string]::IsNullOrWhiteSpace($Body)){throw 'Request must not be empty.'}
     if($Body -match '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]'){throw 'Request contains unsupported control characters.'}
     try{[Text.UTF8Encoding]::new($false,$true).GetByteCount($Body)|Out-Null}catch{throw 'Request contains invalid Unicode text.'}
+    if($null -eq $Conversation){$Conversation=[pscustomobject][ordered]@{schema_version=1;artifact_type='conversation';entries=@()}}
+    if($Conversation.artifact_type -ne 'conversation' -or $null -eq $Conversation.entries){throw 'Conversation data is incomplete.'}
+    $updated=ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $Conversation -Depth 60)
+    $entries=@($updated.entries);$latest=-1
+    for($index=$entries.Count-1;$index -ge 0;$index--){if($entries[$index].kind -eq 'user_query'){$latest=$index;break}}
+    if($ReplaceLatest -and $latest -ge 0){$entries=@($entries[0..$latest]);$entries[$latest].body=$Body;$entries[$latest].timestamp=$Timestamp}
+    else{$entries+=@([pscustomobject][ordered]@{kind='user_query';body=$Body;timestamp=$Timestamp})}
+    $updated.entries=$entries
+    return $updated
+}
+
+function Add-AtaraxiaRequest([string]$Path,[string]$Body,[switch]$ReplaceLatest,[object]$Dependencies=$null) {
     $conversation=Get-AtaraxiaConversation $Path $Dependencies
     $timestamp=(Get-AtaraxiaStoreUtcNow $Dependencies).ToString('o')
-    $entries=@($conversation.entries)
-    $latest=-1
-    for($index=$entries.Count-1;$index -ge 0;$index--) { if($entries[$index].kind -eq 'user_query'){$latest=$index;break} }
-    if($ReplaceLatest -and $latest -ge 0) {
-        $entries=@($entries[0..$latest])
-        $entries[$latest].body=$Body
-        $entries[$latest].timestamp=$timestamp
-    } else {
-        $entries+=@([pscustomobject][ordered]@{kind='user_query';body=$Body;timestamp=$timestamp})
-    }
-    $conversation.entries=$entries
-    Save-AtaraxiaConversation $Path $conversation $Dependencies
-    return $conversation
+    $updated=New-AtaraxiaRequestConversation $conversation $Body $timestamp -ReplaceLatest:$ReplaceLatest
+    Save-AtaraxiaConversation $Path $updated $Dependencies
+    return $updated
 }
