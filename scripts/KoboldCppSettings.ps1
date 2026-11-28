@@ -55,6 +55,12 @@ function Import-KoboldCppSettings([object]$Config, [string]$ConfigPath,[object]$
     $presetData=if($hasPresetData){Read-AtaraxiaJsonStoreFile $presetPath $Dependencies}else{$null}
     Initialize-AtaraxiaModelParameterPresetCatalog $settings @($catalog.presets) $presetData|Out-Null
     if(-not $hasPresetData){Save-AtaraxiaUserModelParameterPresetData $presetPath $settings $Dependencies|Out-Null}
+    if($hasPresetData -and $null -ne $settings.user_preset_data.PSObject.Properties['pending_shared_settings']){
+        . (Join-Path $PSScriptRoot 'GuiModelParameterApplication.ps1')
+        $saveShared={param($value)Save-KoboldCppSettings $settingsPath $value $Dependencies}
+        $savePresets={param($value)Save-AtaraxiaUserModelParameterPresetData $presetPath $value $Dependencies}
+        $null=Resolve-AtaraxiaPendingSharedModelParameterSettings $settings $saveShared $savePresets
+    }
     $server = [string]$settings.server.host
     $port = [int]$settings.server.port
     if ([string]::IsNullOrWhiteSpace($server) -or $port -lt 1 -or $port -gt 65535 -or [uri]::CheckHostName($server) -eq [UriHostNameType]::Unknown) { throw "KoboldCpp server host or port is invalid: $settingsPath" }

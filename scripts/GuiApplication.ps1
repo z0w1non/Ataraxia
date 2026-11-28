@@ -45,16 +45,19 @@ function Open-AtaraxiaGuiProjectSession([string]$ProjectPath,[string]$SessionPat
     return [pscustomobject][ordered]@{project_name=$projectName;project_path=$resolved.project_path;session_path=$resolved.session_path;task_path=$resolved.task_path;activated_project=$activated}
 }
 
-function Build-AtaraxiaGuiProjectSessionOverview([string]$ProjectsRoot,[string]$ActiveProjectName,[int]$RecentLimit,[scriptblock]$ListProjects,[scriptblock]$ResolveProjectPath,[scriptblock]$ListSessions,[scriptblock]$ListRecentSessions) {
+function Build-AtaraxiaGuiProjectSessionOverview([string]$ProjectsRoot,[string]$ActiveProjectName,[int]$RecentLimit,[scriptblock]$ListProjects,[scriptblock]$ResolveProjectPath,[scriptblock]$ListSessions,[scriptblock]$ListRecentSessions,[scriptblock]$JsonReader=$null) {
     foreach($port in @($ListProjects,$ResolveProjectPath,$ListSessions,$ListRecentSessions)){if($port -isnot [scriptblock]){throw 'Project/session overview requires all store adapters.'}}
+    if($null -ne $JsonReader -and $JsonReader -isnot [scriptblock]){throw 'Project/session overview JSON reader must be a script block.'}
     $projects=[System.Collections.Generic.List[object]]::new()
     foreach($name in @(& $ListProjects $ProjectsRoot)){
         $path=[string](& $ResolveProjectPath $ProjectsRoot ([string]$name))
-        $sessions=if($null -ne $Dependencies.PSObject.Properties['json_reader']){@(& $ListSessions $path $Dependencies.json_reader)}else{@(& $ListSessions $path)}
-        $projects.Add([pscustomobject][ordered]@{name=[string]$name;path=$path;is_active=([string]$name -ieq $ActiveProjectName);sessions=$sessions})
+        $sessionItems=[System.Collections.Generic.List[object]]::new()
+        if($null -ne $JsonReader){foreach($session in & $ListSessions $path $JsonReader){$sessionItems.Add($session)|Out-Null}}else{foreach($session in & $ListSessions $path){$sessionItems.Add($session)|Out-Null}}
+        $projects.Add([pscustomobject][ordered]@{name=[string]$name;path=$path;is_active=([string]$name -ieq $ActiveProjectName);sessions=$sessionItems.ToArray()})
     }
-    $recent=if($null -ne $Dependencies.PSObject.Properties['json_reader']){@(& $ListRecentSessions $ProjectsRoot ([Math]::Max(0,$RecentLimit)) $Dependencies.json_reader)}else{@(& $ListRecentSessions $ProjectsRoot ([Math]::Max(0,$RecentLimit)))}
-    return [pscustomobject][ordered]@{projects=@($projects);recent_sessions=$recent}
+    $recentItems=[System.Collections.Generic.List[object]]::new()
+    if($null -ne $JsonReader){foreach($session in & $ListRecentSessions $ProjectsRoot ([Math]::Max(0,$RecentLimit)) $JsonReader){$recentItems.Add($session)|Out-Null}}else{foreach($session in & $ListRecentSessions $ProjectsRoot ([Math]::Max(0,$RecentLimit))){$recentItems.Add($session)|Out-Null}}
+    return [pscustomobject][ordered]@{projects=$projects.ToArray();recent_sessions=$recentItems.ToArray()}
 }
 
 function New-AtaraxiaGuiProjectSessionDependencies([scriptblock]$ListProjects,[scriptblock]$ResolveProjectPath,[scriptblock]$ListSessions,[scriptblock]$ListRecentSessions,[scriptblock]$ProjectExists,[scriptblock]$CreateProject,[scriptblock]$RenameProject,[scriptblock]$CreateSession,[scriptblock]$RenameSession,[scriptblock]$ActivateProject) {
@@ -64,7 +67,8 @@ function New-AtaraxiaGuiProjectSessionDependencies([scriptblock]$ListProjects,[s
 
 function Get-AtaraxiaGuiProjectSessionOverview([object]$Dependencies,[string]$ProjectsRoot,[string]$ActiveProjectName,[int]$RecentLimit) {
     if($null -eq $Dependencies){throw 'Project/session application dependencies are required.'}
-    return Build-AtaraxiaGuiProjectSessionOverview $ProjectsRoot $ActiveProjectName $RecentLimit $Dependencies.list_projects $Dependencies.resolve_project_path $Dependencies.list_sessions $Dependencies.list_recent_sessions
+    $jsonReaderProperty=$Dependencies.PSObject.Properties['json_reader'];$jsonReader=if($null -ne $jsonReaderProperty){$jsonReaderProperty.Value}else{$null}
+    return Build-AtaraxiaGuiProjectSessionOverview $ProjectsRoot $ActiveProjectName $RecentLimit $Dependencies.list_projects $Dependencies.resolve_project_path $Dependencies.list_sessions $Dependencies.list_recent_sessions $jsonReader
 }
 
 function Get-AtaraxiaGuiSessions([object]$Dependencies,[string]$ProjectPath) {
@@ -95,7 +99,16 @@ function Rename-AtaraxiaGuiProject([object]$Dependencies,[string]$ProjectsRoot,[
     if($null -eq $Dependencies){throw 'Project/session application dependencies are required.'}
     $path=[string](& $Dependencies.rename_project $ProjectsRoot $OldName $NewName)
     $active=($OldName -ieq $ActiveProjectName)
-    if($active){& $Dependencies.activate_project $NewName|Out-Null}
+    if($active){
+        try{& $Dependencies.activate_project $NewName|Out-Null}
+        catch{
+            $activationError=$_;$compensationErrors=[System.Collections.Generic.List[string]]::new();$nameRestored=$false
+            try{$path=[string](& $Dependencies.rename_project $ProjectsRoot $NewName $OldName);$nameRestored=$true}catch{$compensationErrors.Add('restore project name: '+$_.Exception.Message)}
+            if($nameRestored){try{& $Dependencies.activate_project $OldName|Out-Null}catch{$compensationErrors.Add('restore active project: '+$_.Exception.Message)}}
+            if($compensationErrors.Count -gt 0){throw "Project rename activation failed: $($activationError.Exception.Message). Compensation also failed: $($compensationErrors -join '; ')"}
+            throw $activationError.Exception
+        }
+    }
     return [pscustomobject][ordered]@{project_name=$NewName;project_path=$path;active_project_changed=$active}
 }
 

@@ -284,11 +284,17 @@ Git管理カタログ `configs/model-parameter-presets.json` の全構造は次�
   "overrides": [{
     "id": "built-in preset ID", "name": "string?",
     "request_parameters": "request_parameters object?"
-  }]
+  }],
+  "pending_shared_settings": {
+    "schema_version": 1,
+    "request_parameters": "request_parameters object"
+  }
 }
 ```
 
 両ファイルの `request_parameters` は同じキーと型を持ち、既知キー以外のKoboldCpp要求値も許容する。プリセットIDは空でなく、制御文字を含まず、128文字以下で一意とする。名前は前後空白を除去した後に1〜64文字で制御文字を含まず、大文字小文字を区別せず一意とする。`active_preset_id` は統合後の配列内IDを参照する。ユーザープリセットの追加・値変更・改名・削除、選択状態、および内蔵値への上書きは利用者データだけへ保存する。内蔵プリセットを削除したときは利用者上書きを消してGit管理の値へ戻す。最後の利用可能プリセットは削除できない。初回移行では従来の共有 `request_parameters` とプリセットを利用者データへ複写し、既存値を温存する。`ATARAXIA_USER_DATA_DIRECTORY` が指定される場合は、そのディレクトリを利用者保存先として使う。
+
+GUIがプリセット利用者データと共有KoboldCpp設定を続けて保存する際、先に利用者データを原子的に保存し、その後に共有設定を保存する。共有設定の保存に失敗したときは、利用者データへ任意の `pending_shared_settings` を追加して、直前の選択値を共有設定へ適用する必要があることを記録する。次回 `Import-KoboldCppSettings` でこの記録を検証し、`request_parameters` を含む共有設定を原子的に保存する。成功した場合のみジャーナルを利用者データから除去する。復旧保存が失敗した場合はジャーナルを保持し、次回起動時に再試行する。`pending_shared_settings` は `{schema_version:1, request_parameters:object}` であり、通常操作はこれを作成・編集しない。これは2ファイルをまたぐトランザクションの未完了状態を示す回復記録である。
 
 内蔵プリセットはモデル提供元の公式推奨値または配布 `generation_config.json` を基準にする。`context_size=8192`、`max_tokens=2048`、各ペナルティの中立値、`seed=-1`、空の`stop`など、根拠資料にない値は共通の初期値として補完し、系列の公式推奨値とは扱わない。`min_p`など現行GUIに編集欄がない値は含めない。初期カタログの対象と根拠は次のとおり。
 
@@ -514,6 +520,8 @@ GUI とコマンドラインは `Invoke-Agent.ps1` を共用する。GUI は Win
 
 GUI の既定 Windows コントロール外観は使用せず、ボタン、入力欄、選択欄、展開欄、スライダー、スクロールバー、進捗表示、コンテキストメニューを独自のベクターテンプレートで描画する。文字入力や選択などの操作性・キーボード操作を保つため、操作部品自体は WPF 標準コントロールを使う。操作アイコンは `assets/ui-icons/`、ロールアイコンは `assets/role-icons/` の SVG を読み込み、WPF のベクター形状に変換してテーマ色で描く。SVG 表示用の外部ライブラリは導入しない。SVG文字列からgeometry文字列への変換は純粋なGUIモデルが行い、SVGファイル読込とWPF Geometry/Path変換は `adapters/WpfIconAssetAdapter.ps1` が行う。 操作可能なアイコンを含む全コントロールには、ローカライズ済みツールチップと一致するUI Automation Nameを設定する。動的生成コントロールは共通Automation Name Adapterを使い、ファイル一覧のように文字とアイコンを併記する場合は項目名をコントロール名として公開する。GUI のテーマは `gui_theme` でライト、ダーク、システム設定準拠から選ぶ。システム設定は起動時に一度だけ読み取り、実行中に定期確認しない。テーマは無彩色を使い、文字と背景の輝度差を十分に確保する。アイコン色は画面内のテーマアイコン色と共有する。テーマパレットは `GuiTheme.ps1` が提供し、WPFリソースへの反映は `adapters/WpfThemeAdapter.ps1` が担う。
 
+テーマ選択は設定JSONの原子的な保存が成功した後に確定する。保存に失敗した場合は現在適用中のテーマ状態を保ち、選択欄を直前に確定していた設定へ戻してからエラーを記録する。
+
 ダイアログも既定のOSウィンドウ枠、標準メッセージボックス、標準ファイル・フォルダー選択画面を使わず、アプリ内のSVGアイコンとテーマ色で描画する。エラー発生時はモーダルダイアログを表示せず、詳細をログへ保存する。GUI稼働中はログの場所をステータス欄へ表示し、起動失敗時は `%LOCALAPPDATA%\Ataraxia\logs`（利用できない場合は `%TEMP%\Ataraxia\logs`）へ記録する。種類、入力、結果の契約は `configs/gui-dialog-contracts.json` と `scripts/GuiDialogContracts.ps1` が定義・検証する。`scripts/GuiDialogs.ps1` が注入された契約生成、結果解釈、ローカライズ、描画、パス選択依存を使って契約を組み立て、呼び出し側の値へ結果を変換する。WPF固有の表示と操作イベントは `adapters/WpfDialogAdapter.ps1`、ファイル・フォルダー一覧は `adapters/PowerShellDialogPathAdapter.ps1` が担い、WPF Adapterは契約生成やアプリケーション結果変換を行わない。この境界により、現在のWPFを維持しながら描画基盤を置き換える場合もダイアログの意味や呼び出し側を維持できる。ダイアログ用SVGは `assets/ui-icons/dialog-*.svg` に置く。
 
 プロジェクトは `projects/<project>/project.json` の `common_prompt`、セッションは `projects/<project>/sessions/<session-id>/session.json` の `common_prompt` に共通プロンプトを保持する。両方が設定されている場合はプロジェクト、セッションの順で結合し、各ロールの system message に追加する。ユーザークエリやロール固有の入力データも従来どおり user message に含め、共通プロンプトと合わせてモデルへ渡す。
@@ -528,9 +536,9 @@ LLM との入出力は JSON オブジェクトで統一する。`json_pretty` �
 
 `configs/config.json` は `koboldcpp-settings.json`、`role-contracts.json`、`agent-harness.json` を参照する。モデルの選択と配置はユーザーが行う。任意の初期化スクリプトは KoboldCpp を別途取得し、公開されている場合は SHA-256 ダイジェストを検証する。Ataraxia はモデルの重みを同梱またはダウンロードしない。
 
-### GUI の抽象化と単体テスト
+### GUI の抽象化とテスト
 
-GUI は表示と入力イベントの結線を担当し、画面に依存しないアプリケーション処理は `scripts/GuiApplication.ps1`、会話表示モデルは `scripts/GuiConversationModel.ps1` に置く。`GuiApplication.ps1` は WPF を読み込まず、起動引数・スプラッシュ方針、セッションのタスクパス解決、エージェント実行ログの解析を提供する。メタデータ読み込みはスクリプトブロックで注入できるため、単体テストは Fake Adapter と画面非依存のPortを使い、GUIを起動せずに引数の引用、起動オプション、セッション境界、ファイル名検証、役割イベント抽出、エラー出力のサニタイズを確認する。`tests/run_tests.ps1` の既定実行はGUIや外部プロセスを起動しない。実際のウィンドウ生成を確認する統合テストは `-GuiIntegration` スイッチを指定した場合だけ実行し、環境変数の継承では有効にならない。画面遷移などの表示状態はframework-neutralなView Portへbooleanで渡し、WPF View Adapterが各コントロールのVisibilityへ変換する。Clipboardへの文字列設定も同Portの注入可能な操作とし、GUIスクリプトにWPF Clipboard APIを露出しない。セッション操作と会話コピー用メニューの生成・文言更新は `adapters/WpfContextMenuAdapter.ps1` が担当する。複数行入力欄の高さは行数、書体サイズ、パディングから画面非依存の `scripts/GuiInputLayout.ps1` が計算し、View AdapterがWPFコントロールへの反映を行う。GUI スクリプトはこのPortとアプリケーションモデルを組み合わせ、WPF固有の操作をPort/Adapterへ段階的に集約する。未移行の表示配線と状態はアーキテクチャ再設計資料に記録する。
+GUI は表示と入力イベントの結線を担当し、画面に依存しないアプリケーション処理は `scripts/GuiApplication.ps1`、モデル設定の保存順序と失敗伝達は `scripts/GuiModelParameterApplication.ps1`、会話表示モデルは `scripts/GuiConversationModel.ps1` に置く。`GuiApplication.ps1` は WPF を読み込まず、起動引数・スプラッシュ方針、セッションのタスクパス解決、エージェント実行ログの解析を提供する。モデル設定アプリケーションはユーザープリセット保存と共有KoboldCpp設定保存を注入Portで順に実行し、前段失敗時の後続書込み禁止と後段失敗時の部分保存状態をエラーに含める。メタデータ読み込みはスクリプトブロックで注入できるため、通常の単体テストは Fake Adapter と画面非依存のPortを使い、GUIを起動せずに引数の引用、起動オプション、セッション境界、ファイル名検証、役割イベント抽出、エラー出力のサニタイズ、プロジェクト操作の補償を確認する。`tests/run_tests.ps1` の既定実行はWPFアセンブリ・ウィンドウ、GUI実行ファイル、外部プロセスを起動しない。WPFアセンブリ未ロードもテスト末尾で検査する。実際のWPFコントロールを検証する場合は `pwsh -STA -File .\tests\run_wpf_control_tests.ps1` を使う。このテストはSTA上でXAMLとWPF Adapterを実体化し、パラメータ入力、テーマ色の切替、テーマ・モデル・プリセットの選択、会話モデルから `ItemsControl` への項目結線、スクロール状態に応じたジャンプボタンの表示を検証する。Measure/Arrangeと入力・イベント操作を行うが、Windowを表示せず外部プロセスも起動しない。実画面表示やAtaraxia.exeからの起動確認は `-GuiIntegration` スイッチを指定した場合だけ行い、環境変数の継承では有効にならない。画面遷移などの表示状態はframework-neutralなView Portへbooleanで渡し、WPF View Adapterが各コントロールのVisibilityへ変換する。Clipboardへの文字列設定も同Portの注入可能な操作とし、GUIスクリプトにWPF Clipboard APIを露出しない。セッション操作と会話コピー用メニューの生成・文言更新は `adapters/WpfContextMenuAdapter.ps1` が担当する。複数行入力欄の高さは行数、書体サイズ、パディングから画面非依存の `scripts/GuiInputLayout.ps1` が計算し、View AdapterがWPFコントロールへの反映を行う。GUI スクリプトはこのPortとアプリケーションモデルを組み合わせ、WPF固有の操作をPort/Adapterへ段階的に集約する。未移行の表示配線と状態はアーキテクチャ再設計資料に記録する。
 
 ### 実行依存の注入と単体テスト
 
@@ -558,6 +566,8 @@ GUI は表示と入力イベントの結線を担当し、画面に依存しな�
 | 同上 | `new_id` | 引数なし | 32 桁の16進数ID |
 
 既定では会話ストアが JSON ファイルを原子的に更新し、ハーネスが検証済みコマンドを子プロセスとして起動し、セッションストアが一意なIDで必要なディレクトリと定義を作る。DI を使う単体テストでは、保存・時刻・ID生成・ディレクトリ作成・プロセス起動をメモリー上の偽物へ置き換え、会話の分岐、セッション定義、許可リスト境界、プロセス出力のサニタイズを OS や実ファイルに依存せず検証する。テストは `tests/run_tests.ps1` から実行する。
+
+セッション作成では、セッションディレクトリ、専用workspace、タスクJSON、メタデータJSONを一つの作成処理として扱う。途中で失敗した場合は、この処理が新規作成したセッションディレクトリを削除して部分状態を残さない。削除時は対象が `sessions/` の直下であることと、再解析点でないことを確認する。補償削除にも失敗した場合は、元の作成エラーと残存ディレクトリのパスを報告する。
 
 許可コマンドの実行では、`AgentHarness.ps1` がコマンドと引数を検証した後に必須の ProcessRunner Portを呼ぶ。Portは入力が解決済みコマンドと絶対パスの作業ディレクトリであること、出力が整数終了コード・Booleanタイムアウト・非負の実行時間・文字列出力であることを検証する。`PowerShellProcessRunner.ps1` はOSプロセスAdapterであり、CLI Composition rootが明示的に結線する。AgentHarness内から直接プロセスを開始しない。
 

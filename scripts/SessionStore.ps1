@@ -2,8 +2,8 @@
 . (Join-Path $PSScriptRoot 'StructuredData.ps1')
 . (Join-Path $PSScriptRoot 'JsonFileStore.ps1')
 
-function New-AtaraxiaSessionStoreDependencies([scriptblock]$PathExists=$null,[scriptblock]$CreateDirectory=$null,[scriptblock]$WriteJson=$null,[scriptblock]$UtcNow=$null,[scriptblock]$NewId=$null,[scriptblock]$ReadJson=$null,[object]$FileStore=$null) {
-    return [pscustomobject]@{ path_exists=$PathExists; create_directory=$CreateDirectory; write_json=$WriteJson; utc_now=$UtcNow; new_id=$NewId; read_json=$ReadJson; file_store=$FileStore }
+function New-AtaraxiaSessionStoreDependencies([scriptblock]$PathExists=$null,[scriptblock]$CreateDirectory=$null,[scriptblock]$WriteJson=$null,[scriptblock]$UtcNow=$null,[scriptblock]$NewId=$null,[scriptblock]$ReadJson=$null,[scriptblock]$RemoveDirectory=$null,[object]$FileStore=$null) {
+    return [pscustomobject]@{ path_exists=$PathExists; create_directory=$CreateDirectory; write_json=$WriteJson; utc_now=$UtcNow; new_id=$NewId; read_json=$ReadJson; remove_directory=$RemoveDirectory; file_store=$FileStore }
 }
 
 function Test-AtaraxiaSessionPath([string]$Path,[object]$Dependencies) {
@@ -16,6 +16,17 @@ function New-AtaraxiaSessionDirectory([string]$Path,[object]$Dependencies,[switc
     if($null -ne $Dependencies -and $Dependencies.create_directory -is [scriptblock]) { & $Dependencies.create_directory $Path ([bool]$Force) | Out-Null; return }
     if($null -ne $Dependencies -and $null -ne $Dependencies.PSObject.Properties['file_store']){Ensure-AtaraxiaJsonStoreDirectory $Path $Dependencies.file_store;return}
     New-Item -ItemType Directory -Force:$Force -Path $Path | Out-Null
+}
+
+function Remove-AtaraxiaCreatedSessionDirectory([string]$Path,[string]$SessionsRoot,[object]$Dependencies) {
+    $root=[IO.Path]::GetFullPath($SessionsRoot).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)
+    $target=[IO.Path]::GetFullPath($Path)
+    if(-not $target.StartsWith($root+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw "Session cleanup target escaped its sessions directory: $target"}
+    if($null -ne $Dependencies -and $Dependencies.remove_directory -is [scriptblock]){& $Dependencies.remove_directory $target|Out-Null;return}
+    if(-not [IO.Directory]::Exists($target)){return}
+    $item=Get-Item -LiteralPath $target -Force -ErrorAction Stop
+    if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw "Session cleanup refuses to recurse through a reparse point: $target"}
+    [IO.Directory]::Delete($target,$true)
 }
 
 function Write-AtaraxiaSessionJson([string]$Path,[object]$Value,[object]$Dependencies) {
@@ -81,19 +92,22 @@ function New-AtaraxiaSession([string]$ProjectPath,[object]$RoleContracts,[string
     if($guid -notmatch '^[0-9a-fA-F]{32}$'){throw 'Session id provider must return 32 hexadecimal characters.'}
     $sessionId='session-'+$timestamp.ToString('yyyyMMdd-HHmmss')+'-'+$guid.Substring(0,8)
     $sessionPath=Join-Path $sessionsRoot $sessionId
-    New-AtaraxiaSessionDirectory $sessionPath $Dependencies
-    $workspace=Join-Path $sessionPath 'workspace'
-    New-AtaraxiaSessionDirectory $workspace $Dependencies
-    $task=Agent-NewTaskTemplate $sessionId $RoleContracts
-    $task.working_directory=$workspace
-    $task.goal=''
-    $taskPath=Join-Path $sessionPath ($sessionId+'.task.json')
-    Write-AtaraxiaSessionJson $taskPath $task $Dependencies
-    if([string]::IsNullOrWhiteSpace($Title)){$Title='New session'}
-    $metadata=[pscustomobject][ordered]@{schema_version=1;artifact_type='session';id=$sessionId;title=$Title;title_generated=$false;title_source='pending';created_at=$timestamp.ToString('o');updated_at=$timestamp.ToString('o');task_file=(Split-Path -Leaf $taskPath)}
-    Write-AtaraxiaSessionJson (Join-Path $sessionPath 'session.json') $metadata $Dependencies
-    $metadata|Add-Member -NotePropertyName path -NotePropertyValue $sessionPath -Force
-    return $metadata
+    $sessionDirectoryCreated=$false
+    try{
+        New-AtaraxiaSessionDirectory $sessionPath $Dependencies;$sessionDirectoryCreated=$true
+        $workspace=Join-Path $sessionPath 'workspace';New-AtaraxiaSessionDirectory $workspace $Dependencies
+        $task=Agent-NewTaskTemplate $sessionId $RoleContracts;$task.working_directory=$workspace;$task.goal=''
+        $taskPath=Join-Path $sessionPath ($sessionId+'.task.json');Write-AtaraxiaSessionJson $taskPath $task $Dependencies
+        if([string]::IsNullOrWhiteSpace($Title)){$Title='New session'}
+        $metadata=[pscustomobject][ordered]@{schema_version=1;artifact_type='session';id=$sessionId;title=$Title;title_generated=$false;title_source='pending';created_at=$timestamp.ToString('o');updated_at=$timestamp.ToString('o');task_file=(Split-Path -Leaf $taskPath)}
+        Write-AtaraxiaSessionJson (Join-Path $sessionPath 'session.json') $metadata $Dependencies
+        $metadata|Add-Member -NotePropertyName path -NotePropertyValue $sessionPath -Force
+        return $metadata
+    }catch{
+        $creationError=$_
+        if($sessionDirectoryCreated){try{Remove-AtaraxiaCreatedSessionDirectory $sessionPath $sessionsRoot $Dependencies}catch{throw [InvalidOperationException]::new("Session creation failed: $($creationError.Exception.Message). Cleanup also failed; inspect residual session directory '$sessionPath': $($_.Exception.Message)",$creationError.Exception)}}
+        throw $creationError
+    }
 }
 
 function Touch-AtaraxiaSession([string]$SessionDirectory,[object]$Dependencies=$null) {

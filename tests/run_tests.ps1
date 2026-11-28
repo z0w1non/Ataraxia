@@ -489,9 +489,9 @@ Test-Case 'User JSON repair preserves recoverable properties and applies only af
 Test-Case 'Personal preset JSON repair restores schema and keeps valid presets' {
     . (Join-Path $projectRoot 'scripts/StructuredData.ps1')
     $path=Join-Path ([IO.Path]::GetTempPath()) 'model-parameter-presets.json';Register-AgentJsonRepairKind $path 'model_parameter_presets'
-    $text='{"schema_version":"bad","active_preset_id":7,"presets":[{"id":"keep","name":"Keep","request_parameters":{"temperature":0.5}},{"id":"drop","name":7,"request_parameters":[]}],"overrides":"broken"}'
+    $text='{"schema_version":"bad","active_preset_id":7,"presets":[{"id":"keep","name":"Keep","request_parameters":{"temperature":0.5}},{"id":"drop","name":7,"request_parameters":[]}],"overrides":"broken","pending_shared_settings":{"schema_version":1,"request_parameters":{"temperature":0.8}}}'
     $proposal=New-AgentJsonRepairProposal $path ([Text.UTF8Encoding]::new($false).GetBytes($text))
-    Assert-True ($proposal.repairable -and $proposal.value.schema_version -eq 1 -and $proposal.value.presets.Count -eq 1 -and $proposal.value.presets[0].id -eq 'keep' -and $proposal.value.overrides.Count -eq 0) 'Personal preset repair did not restore its expected shape while retaining valid entries.'
+    Assert-True ($proposal.repairable -and $proposal.value.schema_version -eq 1 -and $proposal.value.presets.Count -eq 1 -and $proposal.value.presets[0].id -eq 'keep' -and $proposal.value.overrides.Count -eq 0 -and $proposal.value.pending_shared_settings.request_parameters.temperature -eq 0.8) 'Personal preset repair did not restore its expected shape while retaining valid entries and the recovery journal.'
 }
 
 Test-Case 'JSON metadata writes use an atomic store adapter and preserve existing values on failure' {
@@ -719,6 +719,9 @@ Test-Case 'Model parameter presets migrate and support isolated CRUD and switchi
     $duplicateRejected=$false;try{New-AtaraxiaModelParameterPreset $settings 'creative' 'preset-duplicate'|Out-Null}catch{$duplicateRejected=$true};Assert-True $duplicateRejected 'Preset names were not enforced as unique.'
     Save-AtaraxiaModelParameterPresetValues $settings 'preset-creative' ([ordered]@{temperature=1.25;max_tokens=768;top_p=0.9;top_k=40;presence_penalty=0.0;frequency_penalty=0.0;repetition_penalty=1.0;seed=-1;stop=@('STOP')})|Out-Null
     Assert-True ($settings.request_parameters.temperature -eq 1.25 -and $settings.parameter_presets[1].request_parameters.temperature -eq 1.25 -and $settings.request_parameters.context_size -eq 8192) 'Saving preset values did not update the active request or preserve hidden shared values.'
+    $beforeInvalidSave=ConvertTo-Json -InputObject $settings -Depth 60 -Compress;$invalidPresetSaveRejected=$false
+    try{Save-AtaraxiaModelParameterPresetValues $settings 'preset-creative' ([ordered]@{temperature=1.5;top_p=1.5})|Out-Null}catch{$invalidPresetSaveRejected=$true}
+    Assert-True ($invalidPresetSaveRejected -and (ConvertTo-Json -InputObject $settings -Depth 60 -Compress) -ceq $beforeInvalidSave) 'A preset value validation failure partially changed the active or stored preset.'
     Rename-AtaraxiaModelParameterPreset $settings 'preset-creative' 'Creative v2'|Out-Null
     Select-AtaraxiaModelParameterPreset $settings 'default'|Out-Null
     Assert-True ($settings.request_parameters.temperature -eq 0.7 -and $settings.active_parameter_preset_id -eq 'default') 'Selecting a preset did not restore its saved values.'
@@ -728,7 +731,7 @@ Test-Case 'Model parameter presets migrate and support isolated CRUD and switchi
 }
 
 Test-Case 'Model parameter presets reject malformed and duplicate structures' {
-    . (Join-Path $projectRoot 'scripts/GuiModelParameters.ps1');. (Join-Path $projectRoot 'scripts/ModelParameterPresets.ps1')
+    . (Join-Path $projectRoot 'scripts/GuiModelParameters.ps1');. (Join-Path $projectRoot 'scripts/ModelParameterPresets.ps1');. (Join-Path $projectRoot 'scripts/JsonFileStore.ps1')
     $base=[pscustomobject]@{request_parameters=[pscustomobject]@{temperature=0.7}}
     $cases=@(
         [pscustomobject]@{parameter_presets=@([pscustomobject]@{id='x';name='One';request_parameters=[pscustomobject]@{temperature=0.5}},[pscustomobject]@{id='x';name='Two';request_parameters=[pscustomobject]@{temperature=0.6}})},
@@ -738,6 +741,9 @@ Test-Case 'Model parameter presets reject malformed and duplicate structures' {
     )
     foreach($presetData in $cases){$settings=[pscustomobject]@{request_parameters=[pscustomobject]@{temperature=0.7};parameter_presets=$presetData.parameter_presets;active_parameter_preset_id='x'};$rejected=$false;try{Initialize-AtaraxiaModelParameterPresets $settings|Out-Null}catch{$rejected=$true};Assert-True $rejected 'Malformed or duplicate preset data was accepted.'}
     $missing=[pscustomobject]@{request_parameters='invalid'};$rejected=$false;try{Initialize-AtaraxiaModelParameterPresets $missing|Out-Null}catch{$rejected=$true};Assert-True $rejected 'Non-object request_parameters was accepted during migration.'
+    $settings=[pscustomobject]@{request_parameters=[pscustomobject]@{temperature=0.7}};Initialize-AtaraxiaModelParameterPresets $settings|Out-Null;$before=ConvertTo-Json -InputObject $settings -Depth 60 -Compress;$writes=[pscustomobject]@{count=0};$failedWriter={param($Path,$Value,$Depth)$writes.count++;throw 'preset store unavailable'}.GetNewClosure();$store=New-AtaraxiaJsonFileStoreDependencies -WriteJson $failedWriter;$saveFailed=$false
+    try{$null=Save-AtaraxiaUserModelParameterPresetData 'unused.json' $settings $store}catch{$saveFailed=$true}
+    Assert-True ($saveFailed -and $writes.count -eq 1 -and (ConvertTo-Json -InputObject $settings -Depth 60 -Compress) -ceq $before) 'A failed user preset write changed model settings or appeared successful.'
 }
 
 Test-Case 'Built-in model preset catalog is Git-managed and personal presets stay separate' {
@@ -780,6 +786,13 @@ Test-Case 'KoboldCpp import migrates presets to user storage and keeps settings 
         $savedSettings=Read-Json $settingsPath;$savedUserData=Read-Json $userPath
         Assert-True ($null -eq $savedSettings.PSObject.Properties['parameter_presets'] -and $null -eq $savedSettings.PSObject.Properties['user_preset_data']) 'Personal presets leaked back into the Git-managed shared settings file.'
         Assert-True (@($savedUserData.presets|Where-Object{$_.id -eq 'personal-only'}).Count -eq 1) 'A user-created preset was not saved to the user-data JSON.'
+        $activeId=[string]$loaded.active_parameter_preset_id;Save-AtaraxiaModelParameterPresetValues $loaded $activeId ([ordered]@{temperature=0.45})|Out-Null
+        $loaded.user_preset_data|Add-Member -NotePropertyName pending_shared_settings -NotePropertyValue ([pscustomobject]@{schema_version=1;request_parameters=(Copy-AtaraxiaModelParameterPresetValue $loaded.request_parameters)}) -Force
+        Save-AtaraxiaUserModelParameterPresetData $userPath $loaded|Out-Null
+        $loaded.request_parameters.temperature=0.3;Save-KoboldCppSettings $settingsPath $loaded
+        $reloaded=Import-KoboldCppSettings ([pscustomobject]@{koboldcpp_settings_path=$settingsPath}) $configPath
+        $afterRecovery=Read-Json $settingsPath;$afterRecoveryUser=Read-Json $userPath
+        Assert-True ($reloaded.request_parameters.temperature -eq 0.45 -and $afterRecovery.request_parameters.temperature -eq 0.45 -and $null -eq $afterRecoveryUser.PSObject.Properties['pending_shared_settings']) 'KoboldCpp import did not replay and clear the persisted shared-settings recovery journal.'
     }finally{if([string]::IsNullOrWhiteSpace($oldDataDirectory)){Remove-Item Env:ATARAXIA_USER_DATA_DIRECTORY -ErrorAction SilentlyContinue}else{$env:ATARAXIA_USER_DATA_DIRECTORY=$oldDataDirectory};Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue}
 }
 
@@ -834,6 +847,7 @@ Test-Case 'KoboldCpp startup uses injected process endpoint clock and sleep adap
 
 Test-Case 'GUI themes provide modern portable light and dark palettes' {
     . (Join-Path (Join-Path $projectRoot 'scripts') 'GuiTheme.ps1')
+    . (Join-Path (Join-Path $projectRoot 'scripts') 'GuiThemeApplication.ps1')
     $themeSource=Get-Content (Join-Path $projectRoot 'scripts/GuiTheme.ps1') -Raw
     Assert-True ($themeSource -notmatch 'HKCU:|Get-ItemProperty') 'GUI theme application model reads the Windows registry directly.'
     . (Join-Path $projectRoot 'scripts/adapters/WindowsSystemThemeAdapter.ps1')
@@ -865,6 +879,12 @@ Test-Case 'GUI themes provide modern portable light and dark palettes' {
     Assert-True (-not $same.apply_theme -and $same.sync_selector -and $same.state.effective -eq 'light') 'Preference change with the same effective theme requested unnecessary palette application.'
     $invalid=Set-AtaraxiaGuiThemeState $same.state 'neon' 'dark'
     Assert-True (-not $invalid.accepted -and $invalid.state.preference -eq 'light' -and $invalid.state.effective -eq 'light') 'Invalid theme preference mutated GUI theme state.'
+    $persisted=[System.Collections.Generic.List[string]]::new();$persist={param($Preference)$persisted.Add($Preference)}.GetNewClosure()
+    $savedTransition=Invoke-AtaraxiaGuiThemePreferenceSave $same.state 'dark' 'light' $persist
+    Assert-True ($savedTransition.state.preference -eq 'dark' -and $persisted.Count -eq 1 -and $persisted[0] -eq 'dark' -and $same.state.preference -eq 'light') 'Theme preference state was not committed after the injected persistence succeeded.'
+    $failedPersist={param($Preference)throw 'disk full'};$saveRejected=$false
+    try{$null=Invoke-AtaraxiaGuiThemePreferenceSave $same.state 'dark' 'light' $failedPersist}catch{$saveRejected=$_.Exception.Message -match 'disk full'}
+    Assert-True ($saveRejected -and $same.state.preference -eq 'light' -and $same.state.effective -eq 'light') 'A failed theme persistence changed the committed theme state or hid the storage error.'
     . (Join-Path $projectRoot 'scripts/adapters/WpfThemeAdapter.ps1');$resources=@{};$brushFactory={param($Color)[pscustomobject]@{color=$Color}};Set-AtaraxiaWpfThemeResources $resources 'dark' $brushFactory
     Assert-True ($resources.AppBackgroundBrush.color -eq (Get-AtaraxiaThemePalette 'dark').app_background -and $resources.PrimaryTextBrush.color -eq (Get-AtaraxiaThemePalette 'dark').primary_text -and $resources.IconBrush.color -eq (Get-AtaraxiaThemePalette 'dark').icon -and $resources.Count -eq 10) 'Theme adapter did not map the pure palette to all UI resource keys.'
     $modelAdapter=Get-Content (Join-Path $projectRoot 'scripts/adapters/WpfModelParameterAdapter.ps1') -Raw
@@ -981,6 +1001,29 @@ Test-Case 'GUI model parameters round-trip values and reject non-finite input' {
     $rejected=$false;try{$null=Set-AtaraxiaModelParameterValues $settings ([ordered]@{unknown=1})}catch{$rejected=$true};Assert-True $rejected 'Unknown model parameters were silently accepted.'
     $guiSource=Get-Content -Raw (Join-Path $projectRoot 'scripts/Start-AtaraxiaGui.ps1')
     Assert-True ($guiSource -notmatch '=;\.Add_Click|\{\.IsExpanded') 'Model parameter control builder contains invalid event wiring.'
+}
+
+Test-Case 'GUI model parameter persistence validates ports and stops after a failed store write' {
+    . (Join-Path $projectRoot 'scripts/ModelParameterPresets.ps1');. (Join-Path $projectRoot 'scripts/GuiModelParameterApplication.ps1')
+    $settings=[pscustomobject]@{request_parameters=[pscustomobject]@{temperature=0.7};user_preset_data=[pscustomobject]@{schema_version=1;active_preset_id='p';presets=@();overrides=@()}};$events=[System.Collections.Generic.List[string]]::new()
+    $saveUser={param($Value)$events.Add('user')|Out-Null}.GetNewClosure();$saveShared={param($Value)$events.Add('shared')|Out-Null}.GetNewClosure()
+    $saved=Save-AtaraxiaGuiModelParameterSettings $settings $saveUser $saveShared
+    Assert-True ($saved -eq $settings -and ($events -join ',') -eq 'user,shared') 'GUI model settings were not persisted in user-preset then shared-settings order.'
+    $events.Clear();$userFailureMessage='';$failedUser={param($Value)$events.Add('user')|Out-Null;throw 'user store failed'}.GetNewClosure()
+    try{$null=Save-AtaraxiaGuiModelParameterSettings $settings $failedUser $saveShared}catch{$userFailureMessage=$_.Exception.Message}
+    Assert-True ($userFailureMessage -match 'user store failed' -and ($events -join ',') -eq 'user') 'Shared settings were written after user-preset persistence failed or the failure detail was lost.'
+    $events.Clear();$sharedFailureMessage='';$failedShared={param($Value)$events.Add('shared')|Out-Null;throw 'settings store failed'}.GetNewClosure()
+    try{$null=Save-AtaraxiaGuiModelParameterSettings $settings $saveUser $failedShared}catch{$sharedFailureMessage=$_.Exception.Message}
+    Assert-True ($sharedFailureMessage -match 'presets were saved' -and $sharedFailureMessage -match 'settings store failed' -and ($events -join ',') -eq 'user,shared,user') 'The GUI model settings operation lost partial-save context or did not persist its recovery journal after the second store failed.'
+    Assert-True ($settings.user_preset_data.pending_shared_settings.request_parameters.temperature -eq 0.7) 'A failed shared-settings save did not leave a recoverable user-side journal.'
+    $events.Clear();$invalidAdapterRejected=$false
+    try{$null=Save-AtaraxiaGuiModelParameterSettings $settings $null $saveShared}catch{$invalidAdapterRejected=$true}
+    Assert-True ($invalidAdapterRejected -and $events.Count -eq 0) 'Invalid persistence adapters were accepted or effects ran before adapter validation.'
+    $events.Clear();$recovered=Resolve-AtaraxiaPendingSharedModelParameterSettings $settings $saveShared $saveUser
+    Assert-True ($recovered.recovered -and $events -join ',' -eq 'shared,user' -and $null -eq $settings.user_preset_data.PSObject.Properties['pending_shared_settings']) 'A pending shared-settings journal was not replayed and cleared after successful persistence.'
+    $null=Set-AtaraxiaPendingSharedModelParameterSettings $settings $saveUser;$failingRecovery={param($Value)$events.Add('shared-failed')|Out-Null;throw 'offline'}.GetNewClosure();$failedRecovery=$false
+    try{$null=Resolve-AtaraxiaPendingSharedModelParameterSettings $settings $failingRecovery $saveUser}catch{$failedRecovery=$true}
+    Assert-True ($failedRecovery -and $null -ne $settings.user_preset_data.PSObject.Properties['pending_shared_settings']) 'A failed recovery discarded its journal.'
 }
 
 Test-Case 'Generic conversation GUI supports reports and editing the last request' {
@@ -1169,6 +1212,16 @@ Test-Case 'Session creation uses injected filesystem clock and identifier' {
     $session=New-AtaraxiaSession 'C:\virtual\project' $contracts 'Injected session' $dependencies
     Assert-True ($session.id -eq 'session-20260405-060708-01234567' -and $session.created_at -eq '2026-04-05T06:07:08.0000000Z') 'Session id or timestamp did not use injected values.'
     Assert-True ($fake.directories.Count -eq 3 -and $fake.writes.Count -eq 2 -and $fake.writes[0].value.name -eq $session.id -and $fake.writes[1].value.artifact_type -eq 'session') 'Session creation bypassed injected directory or JSON persistence adapters.'
+    $cleanup=[System.Collections.Generic.List[string]]::new();$failedWrites={param($Path,$Value)if($Path -like '*session.json'){throw 'metadata write failed'}};$removeSession={param($Path)$cleanup.Add($Path)|Out-Null}.GetNewClosure()
+    $failureDependencies=New-AtaraxiaSessionStoreDependencies -PathExists $exists -CreateDirectory $mkdir -WriteJson $failedWrites -UtcNow $clock -NewId $id -RemoveDirectory $removeSession;$createRejected=$false;$sessionFailureMessage=''
+    try{$null=New-AtaraxiaSession 'C:\virtual\project' $contracts 'Partial session' $failureDependencies}catch{$createRejected=$true;$sessionFailureMessage=$_.Exception.Message}
+    Assert-True ($createRejected -and $cleanup.Count -eq 1 -and $cleanup[0] -eq 'C:\virtual\project\sessions\session-20260405-060708-01234567' -and $sessionFailureMessage -match 'metadata write failed') 'A partially created session was left behind or the original persistence failure was hidden.'
+    $cleanup.Clear();$failedCleanup={param($Path)throw 'cleanup failed'};$cleanupFailureDependencies=New-AtaraxiaSessionStoreDependencies -PathExists $exists -CreateDirectory $mkdir -WriteJson $failedWrites -UtcNow $clock -NewId $id -RemoveDirectory $failedCleanup;$cleanupFailureMessage=''
+    try{$null=New-AtaraxiaSession 'C:\virtual\project' $contracts 'Partial session' $cleanupFailureDependencies}catch{$cleanupFailureMessage=$_.Exception.Message}
+    Assert-True ($cleanupFailureMessage -match 'metadata write failed' -and $cleanupFailureMessage -match 'cleanup failed' -and $cleanupFailureMessage -match 'session-20260405-060708-01234567') 'A failed session cleanup hid the residual session path or the original error.'
+    $temporaryRoot=Join-Path ([IO.Path]::GetTempPath()) ('ataraxia-session-rollback-'+[guid]::NewGuid().ToString('N'));$temporaryProject=Join-Path $temporaryRoot 'project';New-Item -ItemType Directory -Path $temporaryProject -Force|Out-Null
+    $realFailureDependencies=New-AtaraxiaSessionStoreDependencies -PathExists {param($Path)[IO.Directory]::Exists($Path)} -WriteJson {param($Path,$Value)if($Path -like '*session.json'){throw 'real store failure'};Write-AtaraxiaJsonStoreFile $Path $Value}
+    try{try{$null=New-AtaraxiaSession $temporaryProject $contracts 'Rollback check' $realFailureDependencies}catch{};Assert-True (@(Get-ChildItem -LiteralPath (Join-Path $temporaryProject 'sessions') -Directory -ErrorAction SilentlyContinue).Count -eq 0) 'The default filesystem adapter left a partially written session directory behind.'}finally{Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue}
 }
 
 Test-Case 'Allowlisted command execution uses an injected process runner' {
@@ -1256,7 +1309,8 @@ Test-Case 'GUI application models resolve session paths and process updates with
     $probes=[System.Collections.Generic.List[object]]::new();$probe={param($HostName,$Port,$TimeoutMilliseconds)$probes.Add([pscustomobject]@{host=$HostName;port=$Port;timeout=$TimeoutMilliseconds});return $true}.GetNewClosure()
     $connected=Test-AtaraxiaGuiServiceConnection -Endpoint 'http://localhost:5001/api' -Probe $probe -TimeoutMilliseconds 125
     $rejected=Test-AtaraxiaGuiServiceConnection -Endpoint 'not-a-uri' -Probe $probe -TimeoutMilliseconds 125
-    Assert-True ($connected -and -not $rejected -and $probes.Count -eq 1 -and $probes[0].host -eq 'localhost' -and $probes[0].port -eq 5001 -and $probes[0].timeout -eq 125) 'GUI service connection model did not validate the endpoint or delegate host, port, and timeout to its injected probe.'
+    $probeFailure=Test-AtaraxiaGuiServiceConnection -Endpoint 'http://localhost:5001/api' -Probe {throw 'probe failed'}
+    Assert-True ($connected -and -not $rejected -and -not $probeFailure -and $probes.Count -eq 1 -and $probes[0].host -eq 'localhost' -and $probes[0].port -eq 5001 -and $probes[0].timeout -eq 125) 'GUI service connection model did not validate the endpoint or safely handle injected probe failures.'
     Assert-True (-not (Test-AtaraxiaTcpEndpoint -HostName 'localhost' -Port 0)) 'TCP connection adapter accepted an invalid port.'
     $outputPaths=New-AtaraxiaGuiProcessOutputPaths
     Assert-True ($outputPaths.stdout -ne $outputPaths.stderr -and $outputPaths.stdout -match 'ataraxia-agent-' -and $outputPaths.stderr -eq ($outputPaths.stdout+'.err')) 'Process output adapter did not allocate a unique stdout/stderr path pair.'
@@ -1281,6 +1335,10 @@ Test-Case 'GUI application models resolve session paths and process updates with
     $busyState=[pscustomobject]@{ticks=0};$busyWait={param($milliseconds)$busyState.ticks++}.GetNewClosure();$busyClock={[datetime]::UtcNow.AddSeconds($busyState.ticks)}.GetNewClosure();$alwaysReachable={return $true}
     $busy=Invoke-AtaraxiaGuiKoboldRestart $true {$null=$null} {$null=$null} $alwaysReachable $busyWait $busyClock {throw 'Must not restart while the port is occupied.'} 1 500
     Assert-True (-not $busy.restarted -and $busy.reason -eq 'port_busy' -and $busyState.ticks -eq 1) 'KoboldCpp restart did not stop at the injected timeout while the service port remained occupied.'
+    $saveFailureEvents=[System.Collections.Generic.List[string]]::new();$saveFailed=$false
+    $saveFailureSave={$saveFailureEvents.Add('save')|Out-Null;throw 'save failed'}.GetNewClosure();$saveFailureStop={$saveFailureEvents.Add('stop')|Out-Null}.GetNewClosure();$saveFailureProbe={return $false};$saveFailureWait={param($Milliseconds)};$saveFailureClock={[datetime]::UtcNow};$saveFailureStart={$saveFailureEvents.Add('start')|Out-Null}.GetNewClosure()
+    try{$null=Invoke-AtaraxiaGuiKoboldRestart $true $saveFailureSave $saveFailureStop $saveFailureProbe $saveFailureWait $saveFailureClock $saveFailureStart}catch{$saveFailed=$true}
+    Assert-True ($saveFailed -and ($saveFailureEvents -join ',') -eq 'save') 'KoboldCpp restart continued to stop or start the process after saving settings failed.'
     $selectionState=New-AtaraxiaGuiSessionSelectionState
     $syncing=Set-AtaraxiaGuiSessionSelectionSynchronization $selectionState $true
     $userSelection=Set-AtaraxiaGuiSessionSelectionSynchronization $syncing.state $false
@@ -1298,16 +1356,48 @@ Test-Case 'GUI application models resolve session paths and process updates with
     $listProjects={param($Root)@('Research','Studio')};$resolve={param($Root,$Name)(Join-Path $Root $Name)};$listSessions={param($Path)@([pscustomobject]@{path=(Join-Path $Path 'sessions/s1');title='Recent'})};$recent={param($Root,$Max)@([pscustomobject]@{project_name='Research'})|Select-Object -First $Max};$exists={param($Path)$false};$createdProjects=[System.Collections.Generic.List[string]]::new();$createdSessions=[System.Collections.Generic.List[string]]::new();$renamed=[System.Collections.Generic.List[string]]::new();$createProject={param($Root,$Name)$createdProjects.Add($Name)}.GetNewClosure();$renameProject={param($Root,$Old,$New)$renamed.Add("$Old->$New");Join-Path $Root $New}.GetNewClosure();$createSession={param($Path,$Contracts,$Title)$createdSessions.Add($Path);[pscustomobject]@{path=(Join-Path $Path 'sessions/s2');task_file='s2.task.json'}}.GetNewClosure();$renameSession={param($Path,$Title,$Source)[pscustomobject]@{path=$Path;title=$Title;title_source=$Source}};$activate={param($Name)$activated.Add($Name)}.GetNewClosure();$deps=New-AtaraxiaGuiProjectSessionDependencies $listProjects $resolve $listSessions $recent $exists $createProject $renameProject $createSession $renameSession $activate
     $overview=Get-AtaraxiaGuiProjectSessionOverview $deps 'C:\work' 'Studio' 1
     Assert-True ($overview.projects.Count -eq 2 -and $overview.projects[1].is_active -and $overview.projects[0].sessions.Count -eq 1 -and $overview.recent_sessions.Count -eq 1) 'Project/session overview did not assemble its view model from the ports.'
+    $directOverview=Build-AtaraxiaGuiProjectSessionOverview 'C:\work' 'Research' 1 $listProjects $resolve $listSessions $recent
+    Assert-True ($directOverview.projects.Count -eq 2 -and $directOverview.projects[0].sessions.Count -eq 1 -and $directOverview.recent_sessions.Count -eq 1) 'Project/session overview builder depends on a caller-scope Dependencies variable.'
+    $readerCalls=[System.Collections.Generic.List[string]]::new();$jsonReader={param($Path)$readerCalls.Add($Path)|Out-Null;[pscustomobject]@{task_file='session.task.json'}}.GetNewClosure()
+    $sessionsWithReader={param($Path,$Reader)if($Reader -isnot [scriptblock]){throw 'Session metadata reader was not forwarded.'};$readerCalls.Add('sessions')|Out-Null;& $Reader (Join-Path $Path 'session.json')|Out-Null;@([pscustomobject]@{path=(Join-Path $Path 'sessions/s1')})}.GetNewClosure()
+    $recentWithReader={param($Root,$Max,$Reader)if($Reader -isnot [scriptblock]){throw 'Recent-session metadata reader was not forwarded.'};$readerCalls.Add('recent')|Out-Null;@([pscustomobject]@{project_name='Research'})|Select-Object -First $Max}.GetNewClosure()
+    $readerDeps=New-AtaraxiaGuiProjectSessionDependencies $listProjects $resolve $sessionsWithReader $recentWithReader $exists $createProject $renameProject $createSession $renameSession $activate
+    $readerDeps|Add-Member -NotePropertyName json_reader -NotePropertyValue $jsonReader
+    $readerOverview=Get-AtaraxiaGuiProjectSessionOverview $readerDeps 'C:\work' 'Research' 1
+    Assert-True ($readerOverview.projects.Count -eq 2 -and $readerCalls.Contains('sessions') -and $readerCalls.Contains('recent') -and @($readerCalls|Where-Object{$_ -like '*session.json'}).Count -eq 2) 'Project/session overview did not explicitly forward its injected JSON reader to both session stores.'
+    $emptyProjects={param($Root)@()};$observedLimit=[pscustomobject]@{value=-1};$recentLimitProbe={param($Root,$Maximum)$observedLimit.value=$Maximum;@()}.GetNewClosure()
+    $emptyOverview=Build-AtaraxiaGuiProjectSessionOverview 'C:\work' 'Research' -2 $emptyProjects $resolve $listSessions $recentLimitProbe
+    Assert-True ($emptyOverview.projects.Count -eq 0 -and $emptyOverview.recent_sessions -is [System.Array] -and $emptyOverview.recent_sessions.Count -eq 0 -and $observedLimit.value -eq 0) 'Project/session overview did not return a stable empty array or clamp a negative recent-session limit to zero.'
+    $noSessions={param($Path)@()};$emptyProjectOverview=Build-AtaraxiaGuiProjectSessionOverview 'C:\work' 'Research' 1 $listProjects $resolve $noSessions $recentLimitProbe
+    Assert-True ($emptyProjectOverview.projects.Count -eq 2 -and $emptyProjectOverview.projects[0].sessions -is [System.Array] -and $emptyProjectOverview.projects[0].sessions.Count -eq 0) 'A project with no sessions did not expose a stable empty session array.'
+    $projectsCalls=[pscustomobject]@{count=0};$countProjects={param($Root)$projectsCalls.count++;@()}.GetNewClosure();$invalidPortsRejected=$false
+    try{$null=Build-AtaraxiaGuiProjectSessionOverview 'C:\work' 'Research' 5 $null $resolve $listSessions $recent}catch{$invalidPortsRejected=$true}
+    Assert-True ($invalidPortsRejected -and $projectsCalls.count -eq 0) 'Project/session overview invoked a store before rejecting an incomplete adapter set.'
     $prepared=Prepare-AtaraxiaGuiProject $deps 'C:\work' 'Studio' 'Research'
     Assert-True ($prepared.created_project -and $prepared.activated_project -and $createdProjects[0] -eq 'Studio') 'Preparing a new session project did not create and activate its project.'
     $renamedProject=Rename-AtaraxiaGuiProject $deps 'C:\work' 'Studio' 'Studio2' 'Studio'
     Assert-True ($renamedProject.active_project_changed -and $renamed[0] -eq 'Studio->Studio2') 'Active project rename did not move and reactivate the new project name.'
+    $renameState=[pscustomobject]@{name='Research'};$renameEvents=[System.Collections.Generic.List[string]]::new()
+    $compensatingRename={param($Root,$Old,$New)if($renameState.name -cne $Old){throw "Unexpected project path rename: $($renameState.name) -> $Old"};$renameEvents.Add("rename:$Old->$New")|Out-Null;$renameState.name=$New;Join-Path $Root $New}.GetNewClosure()
+    $failingActivation={param($Name)$renameEvents.Add("activate:$Name")|Out-Null;if($Name -eq 'Research2'){throw 'activation failed'}}.GetNewClosure()
+    $compensationFailed=$false;try{$null=Rename-AtaraxiaGuiProject ([pscustomobject]@{rename_project=$compensatingRename;activate_project=$failingActivation}) 'C:\work' 'Research' 'Research2' 'Research'}catch{$compensationFailed=$true}
+    Assert-True ($compensationFailed -and $renameState.name -eq 'Research' -and ($renameEvents -join ',') -eq 'rename:Research->Research2,activate:Research2,rename:Research2->Research,activate:Research') 'A failed active-project switch left its renamed project path inconsistent instead of attempting compensation.'
+    $failedRollbackEvents=[System.Collections.Generic.List[string]]::new();$failedRollbackState=[pscustomobject]@{name='Research'};$failedRollbackMessage='';$renameWithFailedRollback={param($Root,$Old,$New)$failedRollbackEvents.Add("rename:$Old->$New")|Out-Null;if($Old -eq 'Research2'){throw 'rename rollback failed'};$failedRollbackState.name=$New;Join-Path $Root $New}.GetNewClosure();$activationWithFailure={param($Name)$failedRollbackEvents.Add("activate:$Name")|Out-Null;if($Name -eq 'Research2'){throw 'activation failed'}}.GetNewClosure()
+    try{$null=Rename-AtaraxiaGuiProject ([pscustomobject]@{rename_project=$renameWithFailedRollback;activate_project=$activationWithFailure}) 'C:\work' 'Research' 'Research2' 'Research'}catch{$failedRollbackMessage=$_.Exception.Message}
+    Assert-True ($failedRollbackMessage -match 'activation failed' -and $failedRollbackMessage -match 'rename rollback failed' -and ($failedRollbackEvents -join ',') -eq 'rename:Research->Research2,activate:Research2,rename:Research2->Research') 'A failed path rollback was masked or triggered an activation against the missing old path.'
+    $createFailureEvents=[System.Collections.Generic.List[string]]::new();$createFailed=$false;$failedCreateProject={param($Root,$Name)$createFailureEvents.Add('create')|Out-Null;throw 'project creation failed'}.GetNewClosure();$failedCreateDeps=$deps.PSObject.Copy();$failedCreateDeps.create_project=$failedCreateProject;$failedCreateDeps.activate_project={param($Name)$createFailureEvents.Add('activate')|Out-Null}.GetNewClosure();$failedCreateDeps.create_session={param($Path,$Contracts,$Title)$createFailureEvents.Add('session')|Out-Null}.GetNewClosure()
+    try{$null=New-AtaraxiaGuiSessionForProject $failedCreateDeps 'C:\work' 'NewProject' 'Research' ([pscustomobject]@{})}catch{$createFailed=$true}
+    Assert-True ($createFailed -and ($createFailureEvents -join ',') -eq 'create') 'Session creation continued after the project store failed.'
+    $activationFailureEvents=[System.Collections.Generic.List[string]]::new();$activationFailed=$false;$failedActivationDeps=$deps.PSObject.Copy();$failedActivationDeps.create_project={param($Root,$Name)$activationFailureEvents.Add('create')|Out-Null}.GetNewClosure();$failedActivationDeps.activate_project={param($Name)$activationFailureEvents.Add('activate')|Out-Null;throw 'activation failed'}.GetNewClosure();$failedActivationDeps.create_session={param($Path,$Contracts,$Title)$activationFailureEvents.Add('session')|Out-Null}.GetNewClosure()
+    try{$null=New-AtaraxiaGuiSessionForProject $failedActivationDeps 'C:\work' 'NewProject' 'Research' ([pscustomobject]@{})}catch{$activationFailed=$true}
+    Assert-True ($activationFailed -and ($activationFailureEvents -join ',') -eq 'create,activate') 'Session creation continued after project activation failed.'
     $sessionResult=New-AtaraxiaGuiSessionForProject $deps 'C:\work' 'Research' 'Research' ([pscustomobject]@{})
     Assert-True ($sessionResult.task_path -eq (Join-Path $sessionResult.session.path 's2.task.json') -and $createdSessions.Count -eq 1) 'Session creation did not return a task selection model.'
     $renamedSession=Rename-AtaraxiaGuiSession $deps 'C:\work\Research\sessions\s1' 'Notes' 'user'
     Assert-True ($renamedSession.title -eq 'Notes' -and $renamedSession.title_source -eq 'user') 'Session title update did not return its updated model.'
     $rejected=$false;try{$null=Resolve-AtaraxiaGuiSessionTaskPath -ProjectPath 'C:\work\Research' -SessionPath 'C:\work\Other\session-1' -ReadMetadata $read}catch{$rejected=$true}
     Assert-True $rejected 'GUI application model accepted a session outside its project.'
+    foreach($invalidTaskFile in @('', '..\outside.task.json', 'nested\task.json')){$badRead={param($Path)[pscustomobject]@{task_file=$invalidTaskFile}}.GetNewClosure();$badTaskRejected=$false;try{$null=Resolve-AtaraxiaGuiSessionTaskPath 'C:\work\Research' 'C:\work\Research\sessions\session-1' $badRead}catch{$badTaskRejected=$true};Assert-True $badTaskRejected "GUI session path accepted an unsafe or missing task filename: $invalidTaskFile"}
     $update=Get-AtaraxiaGuiProcessUpdate -Lines @('Run: planner','Run: reviewer') -ErrorText "bad`0 error"
     Assert-True ($update.role_events.Count -eq 2 -and $update.role_events[0].role -eq 'planner' -and $update.role_events[1].role -eq 'reviewer' -and $update.error_text -eq 'bad error' -and -not $update.PSObject.Properties['next_index']) 'GUI application model did not parse received role events, sanitize errors, and leave I/O cursor state to the adapter.'
 }
@@ -1360,7 +1450,8 @@ Test-Case 'GUI errors are logged with source details without modal dialogs' {
 Test-Case 'Theme selection failures are logged without escaping the GUI event' {
     $guiSource=Get-Content -Raw (Join-Path $projectRoot 'scripts/Start-AtaraxiaGui.ps1')
     $themeAction=[regex]::Match($guiSource,"(?m)^Register-AtaraxiaGuiViewAction .*'theme_selector'.*$").Value
-    Assert-True ($themeAction -match 'try\{Save-AtaraxiaThemePreference' -and $themeAction -match 'catch\{Report-AtaraxiaGuiError \$_ ''save_theme''\}') 'Theme persistence errors can escape the WPF selection event and terminate the GUI.'
+    $saveFunction=[regex]::Match($guiSource,'(?s)function Save-AtaraxiaThemePreference[^\r\n]*\{.*?\r?\n\}').Value
+    Assert-True ($themeAction -match 'try\{Save-AtaraxiaThemePreference' -and $themeAction -match 'catch\{Report-AtaraxiaGuiError \$_ ''save_theme''\}' -and $saveFunction -match '\$ThemeSelector\.SelectedValue=\$script:themeState\.preference') 'Theme persistence errors can escape the WPF selection event or leave an uncommitted value selected.'
 }
 
 Test-Case 'GUI localized presentation model resolves labels and theme options' {
@@ -1553,6 +1644,13 @@ Test-Case 'Default unit suite does not launch the GUI executable' {
     $launch=$runner.IndexOf("Start-Process -FilePath (Join-Path `$projectRoot 'Ataraxia.exe')",[StringComparison]::Ordinal)
     $legacyGate='ATARAXIA_RUN_GUI_'+'INTEGRATION'
     Assert-True ($runner -match '(?m)^param\(\[switch\]\$GuiIntegration\)' -and $runner -notmatch [regex]::Escape($legacyGate) -and $gate -ge 0 -and $launch -gt $gate) 'GUI integration is not controlled by an explicit per-invocation switch, so inherited environment can launch windows during unit tests.'
+}
+
+Test-Case 'WPF control emulation is isolated and never displays windows' {
+    $emulationPath=Join-Path $PSScriptRoot 'run_wpf_control_tests.ps1'
+    Assert-True (Test-Path -LiteralPath $emulationPath -PathType Leaf) 'WPF control emulation test runner is missing.'
+    $emulation=Get-Content -LiteralPath $emulationPath -Raw -Encoding UTF8
+    Assert-True ($emulation -match 'GetApartmentState\(\)' -and $emulation -match 'XamlReader\]::Load' -and $emulation -match 'IsVisible' -and $emulation -match 'New-AtaraxiaWpfModelParameterControls' -and $emulation -match 'Set-AtaraxiaWpfThemeResources' -and $emulation -match 'ConvertTo-AtaraxiaConversationView' -and $emulation -match 'ModelFileSelector' -and $emulation -match 'sync_scroll_to_latest_visibility' -and $emulation -notmatch '\.(Show|ShowDialog)\(' -and $emulation -notmatch 'Start-Process|Ataraxia\.exe') 'WPF control emulation does not enforce STA, exercise parameter, theme, conversation, selector, and scroll controls, or stay separate from visible GUI/process startup.'
 }
 
 Test-Case 'GUI window view is valid XAML and retains presentation control contracts' {
@@ -1785,6 +1883,14 @@ Test-Case 'Engineering knowledge is tracked in a structured Markdown table' {
     Assert-True ($knowledge -match '\| ID \| 分類 \| 知見・観察 \| 適用条件・根拠 \| 設計への反映 \| 検証方法 \| 関連箇所 \|' -and $knowledge -match '(?m)^\| KNW-[0-9]{3} \|') 'Engineering knowledge table does not include the agreed fields and stable identifiers.'
     $ids=@([regex]::Matches($knowledge,'(?m)^\| (KNW-[0-9]{3}) \|')|ForEach-Object{$_.Groups[1].Value})
     Assert-True ($ids.Count -ge 1 -and @($ids|Select-Object -Unique).Count -eq $ids.Count) 'Knowledge entries are empty or have duplicate identifiers.'
+}
+
+if(-not $GuiIntegration){
+    Test-Case 'Default unit suite does not load WPF assemblies' {
+        $wpfAssemblyNames=@('PresentationFramework','PresentationCore','WindowsBase','UIAutomationClient','UIAutomationTypes','ReachFramework')
+        $loadedWpfAssemblies=@([AppDomain]::CurrentDomain.GetAssemblies()|ForEach-Object{$_.GetName().Name}|Where-Object{$wpfAssemblyNames -contains $_})
+        Assert-True ($loadedWpfAssemblies.Count -eq 0) "Headless unit tests loaded WPF assemblies: $($loadedWpfAssemblies -join ', ')."
+    }
 }
 
 Write-Output "Result: $passed passed, $failed failed"

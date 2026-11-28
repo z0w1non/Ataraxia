@@ -9,6 +9,8 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $ConfigPath = Join-Path $projectRoot 'configs/config.json' }
 . (Join-Path $PSScriptRoot 'GuiApplication.ps1')
+. (Join-Path $PSScriptRoot 'GuiModelParameterApplication.ps1')
+. (Join-Path $PSScriptRoot 'GuiThemeApplication.ps1')
 . (Join-Path $PSScriptRoot 'GuiSingleInstance.ps1')
 . (Join-Path $PSScriptRoot 'adapters/PowerShellGuiSingleInstanceAdapter.ps1')
 . (Join-Path $PSScriptRoot 'GuiErrorLogging.ps1')
@@ -173,7 +175,9 @@ function Load-AtaraxiaThemePreference {
     if($transition.apply_theme){Apply-AtaraxiaTheme $script:themeState.effective}
 }
 function Save-AtaraxiaThemePreference([string]$Mode) {
-    $transition=Set-AtaraxiaGuiThemeState $script:themeState $Mode (Get-AtaraxiaWindowsSystemTheme);if(-not $transition.accepted){return};$configPath=[IO.Path]::GetFullPath($RuntimeConfig.Text);$settings=Get-AtaraxiaConfig;$settings|Add-Member -NotePropertyName gui_theme -NotePropertyValue $Mode -Force;Write-AtaraxiaJsonStoreFile $configPath $settings $script:guiJsonStore 100;$script:themeState=$transition.state;if($transition.apply_theme){Apply-AtaraxiaTheme $script:themeState.effective}
+    $savePreference={param($Preference)$configPath=[IO.Path]::GetFullPath($RuntimeConfig.Text);$settings=Get-AtaraxiaConfig;$settings|Add-Member -NotePropertyName gui_theme -NotePropertyValue $Preference -Force;Write-AtaraxiaJsonStoreFile $configPath $settings $script:guiJsonStore 100}
+    try{$transition=Invoke-AtaraxiaGuiThemePreferenceSave $script:themeState $Mode (Get-AtaraxiaWindowsSystemTheme) $savePreference}catch{$script:updatingTheme=$true;try{$ThemeSelector.SelectedValue=$script:themeState.preference}finally{$script:updatingTheme=$false};throw}
+    if(-not $transition.accepted){return};$script:themeState=$transition.state;if($transition.apply_theme){Apply-AtaraxiaTheme $script:themeState.effective}
 }
 function Get-AtaraxiaRoleLabel([string]$RoleId) {
     $key='gui_role_'+(($RoleId -replace '[^A-Za-z0-9_]','_').ToLowerInvariant())
@@ -321,7 +325,9 @@ function Sync-AtaraxiaModelParameterPresetSelector([object]$Settings) {
     try{Set-AtaraxiaGuiViewItems $script:guiViewPort 'parameter_presets' $items;$ParameterPresetSelector.SelectedValuePath='id';$ParameterPresetSelector.SelectedValue=[string]$Settings.active_parameter_preset_id;$null=Set-AtaraxiaModelParameterEditorPreset $script:modelParameterEditorState ([string]$Settings.active_parameter_preset_id)}finally{$null=Set-AtaraxiaModelParameterEditorLoading $script:modelParameterEditorState $wasLoading}
 }
 function Save-AtaraxiaModelParameterPresetSettings([object]$Settings) {
-    $config=Get-AtaraxiaConfig;$settingsPath=Get-KoboldCppSettingsPath $config $RuntimeConfig.Text;$presetPath=Get-AtaraxiaUserModelParameterPresetPath;Save-AtaraxiaUserModelParameterPresetData $presetPath $Settings $script:guiJsonStore|Out-Null;Save-KoboldCppSettings $settingsPath $Settings $script:guiJsonStore
+    $config=Get-AtaraxiaConfig;$settingsPath=Get-KoboldCppSettingsPath $config $RuntimeConfig.Text;$presetPath=Get-AtaraxiaUserModelParameterPresetPath;$store=$script:guiJsonStore
+    $saveUserPresets={param($Value)Save-AtaraxiaUserModelParameterPresetData $presetPath $Value $store|Out-Null}.GetNewClosure();$saveSharedSettings={param($Value)Save-KoboldCppSettings $settingsPath $Value $store|Out-Null}.GetNewClosure()
+    Save-AtaraxiaGuiModelParameterSettings $Settings $saveUserPresets $saveSharedSettings|Out-Null
     $config|Add-Member -NotePropertyName koboldcpp_base_settings -NotePropertyValue $Settings -Force;$config|Add-Member -NotePropertyName override -NotePropertyValue $Settings.request_parameters -Force
 }
 function Save-AtaraxiaSelectedModel {
@@ -331,8 +337,8 @@ function Save-AtaraxiaSelectedModel {
     $modelDirectory=[string]$settings.paths.model_directory;if(-not [IO.Path]::IsPathRooted($modelDirectory)){$modelDirectory=Join-Path (Split-Path -Parent $PSScriptRoot) $modelDirectory};$modelDirectory=[IO.Path]::GetFullPath($modelDirectory)
     $modelPath=[IO.Path]::GetFullPath([string]$selected.path)
     $settings.paths.model_file=Get-AtaraxiaModelRelativePath $modelDirectory $modelPath
-    Save-AtaraxiaUserModelParameterPresetData (Get-AtaraxiaUserModelParameterPresetPath) $settings $script:guiJsonStore|Out-Null
-    Save-KoboldCppSettings $settingsPath $settings $script:guiJsonStore
+    $presetPath=Get-AtaraxiaUserModelParameterPresetPath;$store=$script:guiJsonStore;$saveUserPresets={param($Value)Save-AtaraxiaUserModelParameterPresetData $presetPath $Value $store|Out-Null}.GetNewClosure();$saveSharedSettings={param($Value)Save-KoboldCppSettings $settingsPath $Value $store|Out-Null}.GetNewClosure()
+    Save-AtaraxiaGuiModelParameterSettings $settings $saveUserPresets $saveSharedSettings|Out-Null
     $null=Set-AtaraxiaModelParameterEditorDirty $script:modelParameterEditorState $false
     Build-AtaraxiaModelParameterControls
 }
@@ -346,8 +352,8 @@ function Save-AtaraxiaModelParameters {
     foreach($definition in Get-AtaraxiaModelParameterDefinitions){$control=$script:modelParameterControls[$definition.key];if($definition.kind -eq 'string'){$raw=[string]$control.Text;if($definition.key -eq 'stop'){if([string]::IsNullOrWhiteSpace($raw)){$values[$definition.key]=@()}else{$values[$definition.key]=@($raw -split "`r?`n"|Where-Object{$_ -ne ''})}}else{$values[$definition.key]=$raw}}else{$inputResult=Get-AtaraxiaModelParameterInputResult $definition.key $control.Text;if(-not $inputResult.valid){throw $inputResult.error};$values[$definition.key]=$inputResult.value}}
     $presetId=[string]$script:modelParameterEditorState.active_preset_id;if([string]::IsNullOrWhiteSpace($presetId)){$presetId=[string]$settings.active_parameter_preset_id}
     Save-AtaraxiaModelParameterPresetValues $settings $presetId $values|Out-Null
-    Save-AtaraxiaUserModelParameterPresetData (Get-AtaraxiaUserModelParameterPresetPath) $settings $script:guiJsonStore|Out-Null
-    Save-KoboldCppSettings $settingsPath $settings $script:guiJsonStore
+    $presetPath=Get-AtaraxiaUserModelParameterPresetPath;$store=$script:guiJsonStore;$saveUserPresets={param($Value)Save-AtaraxiaUserModelParameterPresetData $presetPath $Value $store|Out-Null}.GetNewClosure();$saveSharedSettings={param($Value)Save-KoboldCppSettings $settingsPath $Value $store|Out-Null}.GetNewClosure()
+    Save-AtaraxiaGuiModelParameterSettings $settings $saveUserPresets $saveSharedSettings|Out-Null
     $config|Add-Member -NotePropertyName koboldcpp_base_settings -NotePropertyValue $settings -Force
     $config|Add-Member -NotePropertyName override -NotePropertyValue $settings.request_parameters -Force
     $script:modelParameterValues=$values

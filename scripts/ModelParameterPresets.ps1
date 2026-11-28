@@ -122,7 +122,9 @@ function Remove-AtaraxiaModelParameterPreset([object]$Settings,[string]$Id) {
 function Get-AtaraxiaUserModelParameterPresetData([object]$Settings) {
     if($null -eq $Settings.user_preset_data){throw 'User model parameter preset data is not initialized.'}
     $presets=@(foreach($preset in $Settings.parameter_presets|Where-Object{[string]$_.origin -eq 'user'}){[pscustomobject][ordered]@{id=[string]$preset.id;name=[string]$preset.name;request_parameters=(Copy-AtaraxiaModelParameterPresetValue $preset.request_parameters)}})
-    return [pscustomobject][ordered]@{schema_version=1;active_preset_id=[string]$Settings.active_parameter_preset_id;presets=$presets;overrides=@($Settings.user_preset_data.overrides)}
+    $data=[pscustomobject][ordered]@{schema_version=1;active_preset_id=[string]$Settings.active_parameter_preset_id;presets=$presets;overrides=@($Settings.user_preset_data.overrides)}
+    if($null -ne $Settings.user_preset_data.PSObject.Properties['pending_shared_settings']){$data|Add-Member -NotePropertyName pending_shared_settings -NotePropertyValue (Copy-AtaraxiaModelParameterPresetValue $Settings.user_preset_data.pending_shared_settings)}
+    return $data
 }
 
 function Save-AtaraxiaUserModelParameterPresetData([string]$Path,[object]$Settings,[object]$Dependencies=$null) {
