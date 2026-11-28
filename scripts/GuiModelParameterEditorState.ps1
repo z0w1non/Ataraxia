@@ -1,7 +1,7 @@
 ﻿Set-StrictMode -Version Latest
 
 function New-AtaraxiaModelParameterEditorState {
-    return [pscustomobject][ordered]@{initialized=$false;dirty=$false;loading=$false;active_preset_id=''}
+    return [pscustomobject][ordered]@{initialized=$false;dirty=$false;loading=$false;active_preset_id='';active_preset_origin=''}
 }
 
 function Assert-AtaraxiaModelParameterEditorState([object]$State) {
@@ -20,11 +20,17 @@ function Set-AtaraxiaModelParameterEditorDirty([object]$State,[bool]$Dirty) {
     return $State
 }
 
-function Set-AtaraxiaModelParameterEditorPreset([object]$State,[string]$PresetId) {
+function Set-AtaraxiaModelParameterEditorPreset([object]$State,[string]$PresetId,[ValidateSet('user','builtin')][string]$Origin='user') {
     Assert-AtaraxiaModelParameterEditorState $State
     if([string]::IsNullOrWhiteSpace($PresetId)){throw 'An active model parameter preset ID is required.'}
     $State.active_preset_id=$PresetId
+    $State.active_preset_origin=$Origin
     return $State
+}
+
+function Test-AtaraxiaModelParameterEditorOverwriteAllowed([object]$State) {
+    Assert-AtaraxiaModelParameterEditorState $State
+    return ([string]$State.active_preset_origin -ne 'builtin')
 }
 
 function Set-AtaraxiaModelParameterEditorInitialized([object]$State,[bool]$Initialized) {

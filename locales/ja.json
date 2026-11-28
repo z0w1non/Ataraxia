@@ -1,4 +1,4 @@
-﻿{
+{
   "gui_title": "",
   "gui_startup_loading": "起動しています…",
   "gui_runtime_config": "実行設定",
@@ -17,7 +17,6 @@
   "gui_parameter_preset_builtin_suffix": "［内蔵］",
   "gui_parameter_preset_customized_suffix": "［内蔵・個人設定］",
   "gui_parameter_preset_user_suffix": "［個人］",
-  "gui_parameter_preset_reset": "初期値に戻す",
   "gui_parameter_preset_save": "保存",
   "gui_parameter_preset_save_as": "別名で保存",
   "gui_parameter_preset_rename": "名前変更",
@@ -26,8 +25,6 @@
   "gui_parameter_preset_name_message": "プリセット名を入力してください。",
   "gui_parameter_preset_delete_title": "プリセットの削除",
   "gui_parameter_preset_delete_confirm": "プリセット「{0}」を削除しますか？",
-  "gui_parameter_preset_reset_title": "内蔵プリセットのリセット",
-  "gui_parameter_preset_reset_confirm": "「{0}」の個人設定を破棄し、Git管理の初期値へ戻しますか？",
   "gui_parameter_preset_last_error": "最後のプリセットは削除できません。",
   "gui_parameter_preset_saved": "プリセットを保存しました。",
   "gui_param_increase": "値を増やす",

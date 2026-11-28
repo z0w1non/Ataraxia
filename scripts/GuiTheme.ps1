@@ -1,9 +1,9 @@
 ﻿function Get-AtaraxiaThemePalette {
     param([ValidateSet('light','dark')][string]$Mode)
     if($Mode -eq 'light'){
-        return [pscustomobject][ordered]@{app_background='#F5F7FB';surface='#FFFFFF';panel='#EAF0FA';drawer='#EEF2F8';primary_text='#172033';secondary_text='#526078';border='#D7DFEC';accent='#4059C7';accent_text='#FFFFFF';icon='#5F5F5F'}
+        return [pscustomobject][ordered]@{app_background='#F5F5F5';surface='#FFFFFF';panel='#E8E8E8';drawer='#EEEEEE';primary_text='#171717';secondary_text='#505050';border='#B8B8B8';accent='#303030';accent_text='#FFFFFF';icon='#505050'}
     }
-    return [pscustomobject][ordered]@{app_background='#111827';surface='#1D2B40';panel='#263750';drawer='#151F30';primary_text='#F1F5FC';secondary_text='#B5C1D4';border='#42536D';accent='#93AAFF';accent_text='#1C1C1C';icon='#C7C7C7'}
+    return [pscustomobject][ordered]@{app_background='#171717';surface='#242424';panel='#303030';drawer='#1D1D1D';primary_text='#F5F5F5';secondary_text='#C2C2C2';border='#666666';accent='#D0D0D0';accent_text='#171717';icon='#D0D0D0'}
 }
 function Get-AtaraxiaContrastRatio {
     param([string]$Foreground,[string]$Background)

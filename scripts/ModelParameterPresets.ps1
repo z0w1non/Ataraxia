@@ -71,6 +71,12 @@ function Get-AtaraxiaModelParameterPreset([object]$Settings,[string]$Id) {
     return $matches[0]
 }
 
+function Get-AtaraxiaModelParameterPresetCapabilities([object]$Preset) {
+    if($null -eq $Preset -or $null -eq $Preset.PSObject.Properties['origin']){throw 'A model parameter preset with an origin is required.'}
+    $userOwned=[string]$Preset.origin -eq 'user'
+    return [pscustomobject][ordered]@{can_overwrite=$userOwned;can_delete=$userOwned;can_save_as=$true}
+}
+
 function Assert-AtaraxiaModelParameterPresetNameAvailable([object]$Settings,[string]$Name,[string]$ExceptId='') {
     $normalized=Assert-AtaraxiaModelParameterPresetName $Name
     if(@($Settings.parameter_presets|Where-Object{[string]$_.id -cne $ExceptId -and [string]$_.name -ieq $normalized}).Count -gt 0){throw "Model parameter preset name '$normalized' is already in use."}
@@ -92,18 +98,17 @@ function New-AtaraxiaModelParameterPreset([object]$Settings,[string]$Name,[strin
 
 function Save-AtaraxiaModelParameterPresetValues([object]$Settings,[string]$Id,[System.Collections.IDictionary]$Values) {
     $preset=Get-AtaraxiaModelParameterPreset $Settings $Id
+    if([string]$preset.origin -eq 'builtin'){throw 'Built-in model parameter presets cannot be overwritten. Use Save As to create a user preset.'}
     $request=Copy-AtaraxiaModelParameterPresetValue $preset.request_parameters
     foreach($key in $Values.Keys){$value=Assert-AtaraxiaModelParameterValue ([string]$key) $Values[$key];$request|Add-Member -NotePropertyName ([string]$key) -NotePropertyValue $value -Force}
-    if([string]$preset.origin -eq 'builtin'){$override=@($Settings.user_preset_data.overrides|Where-Object{[string]$_.id -ceq $Id}|Select-Object -First 1);if($override.Count -eq 0){$override=[pscustomobject][ordered]@{id=$Id;name=[string]$preset.name;request_parameters=$request};$Settings.user_preset_data.overrides=@($Settings.user_preset_data.overrides)+@($override)}else{$override[0].request_parameters=$request};$preset.has_user_override=$true}
-    else{$preset.request_parameters=$request;$saved=@($Settings.user_preset_data.presets|Where-Object{[string]$_.id -ceq $Id}|Select-Object -First 1);if($saved.Count -eq 0){$Settings.user_preset_data.presets=@($Settings.user_preset_data.presets)+@([pscustomobject][ordered]@{id=$Id;name=[string]$preset.name;request_parameters=$request})}else{$saved[0].request_parameters=$request}}
-    if([string]$preset.origin -eq 'builtin'){$preset.request_parameters=$request}
+    $preset.request_parameters=$request;$saved=@($Settings.user_preset_data.presets|Where-Object{[string]$_.id -ceq $Id}|Select-Object -First 1);if($saved.Count -eq 0){$Settings.user_preset_data.presets=@($Settings.user_preset_data.presets)+@([pscustomobject][ordered]@{id=$Id;name=[string]$preset.name;request_parameters=$request})}else{$saved[0].request_parameters=$request}
     if([string]$Settings.active_parameter_preset_id -ceq $Id){$Settings.request_parameters=Copy-AtaraxiaModelParameterPresetValue $request}
     return $preset
 }
 
 function Rename-AtaraxiaModelParameterPreset([object]$Settings,[string]$Id,[string]$Name) {
     $preset=Get-AtaraxiaModelParameterPreset $Settings $Id;$normalized=Assert-AtaraxiaModelParameterPresetNameAvailable $Settings $Name $Id
-    if([string]$preset.origin -eq 'builtin'){$override=@($Settings.user_preset_data.overrides|Where-Object{[string]$_.id -ceq $Id}|Select-Object -First 1);if($override.Count -eq 0){$override=[pscustomobject][ordered]@{id=$Id;name=$normalized;request_parameters=(Copy-AtaraxiaModelParameterPresetValue $preset.request_parameters)};$Settings.user_preset_data.overrides=@($Settings.user_preset_data.overrides)+@($override)}else{$override[0].name=$normalized};$preset.has_user_override=$true;if($null -ne $preset.PSObject.Properties['name_en']){$preset.name_en=$normalized}}else{$saved=@($Settings.user_preset_data.presets|Where-Object{[string]$_.id -ceq $Id}|Select-Object -First 1);if($saved.Count -gt 0){$saved[0].name=$normalized}};$preset.name=$normalized;return $preset
+    if([string]$preset.origin -eq 'builtin'){$override=@($Settings.user_preset_data.overrides|Where-Object{[string]$_.id -ceq $Id}|Select-Object -First 1);if($override.Count -eq 0){$override=[pscustomobject][ordered]@{id=$Id;name=$normalized};$Settings.user_preset_data.overrides=@($Settings.user_preset_data.overrides)+@($override)}else{$override[0].name=$normalized};$preset.has_user_override=$true;if($null -ne $preset.PSObject.Properties['name_en']){$preset.name_en=$normalized}}else{$saved=@($Settings.user_preset_data.presets|Where-Object{[string]$_.id -ceq $Id}|Select-Object -First 1);if($saved.Count -gt 0){$saved[0].name=$normalized}};$preset.name=$normalized;return $preset
 }
 
 function Select-AtaraxiaModelParameterPreset([object]$Settings,[string]$Id) {
@@ -112,7 +117,7 @@ function Select-AtaraxiaModelParameterPreset([object]$Settings,[string]$Id) {
 
 function Remove-AtaraxiaModelParameterPreset([object]$Settings,[string]$Id) {
     $preset=Get-AtaraxiaModelParameterPreset $Settings $Id
-    if([string]$preset.origin -eq 'builtin'){$Settings.user_preset_data.overrides=@($Settings.user_preset_data.overrides|Where-Object{[string]$_.id -cne $Id});$preset.name=[string]$preset.source_name;if($null -ne $preset.PSObject.Properties['name_en']){$preset.name_en=[string]$preset.source_name_en};$preset.request_parameters=Copy-AtaraxiaModelParameterPresetValue $preset.source_request_parameters;$preset.has_user_override=$false;if([string]$Settings.active_parameter_preset_id -ceq $Id){$Settings.request_parameters=Copy-AtaraxiaModelParameterPresetValue $preset.request_parameters};return $Settings}
+    if([string]$preset.origin -eq 'builtin'){throw 'Built-in model parameter presets cannot be deleted.'}
     if(@($Settings.parameter_presets).Count -le 1){throw 'At least one model parameter preset must remain.'}
     $Settings.parameter_presets=@($Settings.parameter_presets|Where-Object{[string]$_.id -cne $Id});$Settings.user_preset_data.presets=@($Settings.user_preset_data.presets|Where-Object{[string]$_.id -cne $Id})
     if([string]$Settings.active_parameter_preset_id -ceq $Id){$replacement=$Settings.parameter_presets[0];$Settings.active_parameter_preset_id=[string]$replacement.id;$Settings.request_parameters=Copy-AtaraxiaModelParameterPresetValue $replacement.request_parameters}

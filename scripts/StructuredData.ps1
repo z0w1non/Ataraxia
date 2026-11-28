@@ -43,7 +43,7 @@ function Read-AgentJsonFile([string]$Path,[long]$MaximumBytes=4194304,[scriptblo
 }
 
 $script:AgentJsonRepairKinds=@{}
-function Register-AgentJsonRepairKind([string]$Path,[ValidateSet('config','kobold_settings','model_parameter_presets','object')][string]$Kind){$script:AgentJsonRepairKinds[[IO.Path]::GetFullPath($Path)]=$Kind}
+function Register-AgentJsonRepairKind([string]$Path,[ValidateSet('config','kobold_settings','model_parameter_presets','object','journal')][string]$Kind){$script:AgentJsonRepairKinds[[IO.Path]::GetFullPath($Path)]=$Kind}
 
 function Test-AgentJsonDocumentShape([string]$Path,[object]$Value) {
     $kind=Get-AgentJsonRepairKind $Path

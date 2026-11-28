@@ -1,4 +1,4 @@
-﻿{
+{
   "gui_title": "",
   "gui_startup_loading": "Starting…",
   "gui_runtime_config": "Runtime config",
@@ -17,7 +17,6 @@
   "gui_parameter_preset_builtin_suffix": "[Built in]",
   "gui_parameter_preset_customized_suffix": "[Built in · customized]",
   "gui_parameter_preset_user_suffix": "[Personal]",
-  "gui_parameter_preset_reset": "Reset to built in",
   "gui_parameter_preset_save": "Save",
   "gui_parameter_preset_save_as": "Save as",
   "gui_parameter_preset_rename": "Rename",
@@ -26,8 +25,6 @@
   "gui_parameter_preset_name_message": "Enter a name for this preset.",
   "gui_parameter_preset_delete_title": "Delete preset",
   "gui_parameter_preset_delete_confirm": "Delete preset '{0}'?",
-  "gui_parameter_preset_reset_title": "Reset built-in preset",
-  "gui_parameter_preset_reset_confirm": "Discard personal changes to '{0}' and restore the Git-managed defaults?",
   "gui_parameter_preset_last_error": "The last preset cannot be deleted.",
   "gui_parameter_preset_saved": "Preset saved.",
   "gui_param_increase": "Increase value",

@@ -64,6 +64,7 @@ if ($GuiIntegration) {
 Test-Case 'Optional GUI integration: repeated launch reuses the window for the same config' {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { return }
     $tempDirectory=Join-Path ([IO.Path]::GetTempPath()) ('ataraxia-launch-smoke-'+[Guid]::NewGuid().ToString('N'))
+    $previousErrorLogPath=$env:ATARAXIA_ERROR_LOG_PATH
     New-Item -ItemType Directory -Path $tempDirectory -Force|Out-Null
     $launcher=$null;$secondLauncher=$null;$childIds=@();$secondChildIds=@()
     try {
@@ -73,6 +74,7 @@ Test-Case 'Optional GUI integration: repeated launch reuses the window for the s
         $settings.paths.model_directory=$tempDirectory
         $settings.paths.install_directory=$tempDirectory
         $settingsPath=Join-Path $tempDirectory 'koboldcpp-settings.json'
+        $logRoot=Join-Path $tempDirectory 'diagnostic-logs';$null=New-Item -ItemType Directory -Path $logRoot -Force;$env:ATARAXIA_ERROR_LOG_PATH=Join-Path $logRoot 'gui-startup.log'
         $configPath=Join-Path $tempDirectory 'gui-smoke-config.json'
         $config.koboldcpp_settings_path=$settingsPath
         $config.role_contracts_path=Join-Path $projectRoot 'configs/role-contracts.json'
@@ -230,7 +232,10 @@ public static class AtaraxiaGuiWindowProbe {
         if($null -ne $secondLauncher){Stop-Process -Id $secondLauncher.Id -Force -ErrorAction SilentlyContinue}
         foreach($childId in $childIds){Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue}
         if($null -ne $launcher){Stop-Process -Id $launcher.Id -Force -ErrorAction SilentlyContinue}
+        $logPath=Join-Path $tempDirectory 'diagnostic-logs/gui-startup.log'
+        if(Test-Path $logPath){Write-Output ('GUI_STARTUP_LOG '+$logPath);Get-Content -LiteralPath $logPath -Raw}
         Remove-Item -LiteralPath $tempDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        $env:ATARAXIA_ERROR_LOG_PATH=$previousErrorLogPath
     }
 }
 Test-Case 'Optional GUI integration: input text stays within visible text bounds' {
@@ -759,10 +764,10 @@ Test-Case 'Built-in model preset catalog is Git-managed and personal presets sta
     Initialize-AtaraxiaModelParameterPresetCatalog $settings $catalog.presets $userData|Out-Null
     Assert-True (@($settings.parameter_presets|Where-Object{[string]$_.id -eq 'user-private' -and $_.origin -eq 'user'}).Count -eq 1) 'User preset was not merged as a user-owned preset.'
     Assert-True (@($settings.parameter_presets|Where-Object{[string]$_.id -eq 'qwen3_5_instruct_general' -and $_.origin -eq 'builtin'}).Count -eq 1) 'Built-in preset was not marked as Git-managed.'
-    Save-AtaraxiaModelParameterPresetValues $settings 'qwen3_5_instruct_general' ([ordered]@{temperature=0.5})|Out-Null
-    Assert-True ($settings.user_preset_data.overrides.Count -eq 1 -and $settings.parameter_presets[0].origin -eq 'builtin') 'Editing a built-in preset changed its tracked source instead of storing a user override.'
-    Remove-AtaraxiaModelParameterPreset $settings 'qwen3_5_instruct_general'|Out-Null
-    Assert-True ($settings.user_preset_data.overrides.Count -eq 0 -and $settings.parameter_presets[0].request_parameters.temperature -eq $catalog.presets[0].request_parameters.temperature -and $settings.parameter_presets[0].name_en -eq $catalog.presets[0].name_en) 'Resetting a built-in preset did not restore its Git-managed values.'
+    $builtinBefore=ConvertTo-Json -InputObject $settings -Depth 60 -Compress;$builtinSaveRejected=$false;try{Save-AtaraxiaModelParameterPresetValues $settings 'qwen3_5_instruct_general' ([ordered]@{temperature=0.5})|Out-Null}catch{$builtinSaveRejected=$true}
+    $builtinDeleteRejected=$false;try{Remove-AtaraxiaModelParameterPreset $settings 'qwen3_5_instruct_general'|Out-Null}catch{$builtinDeleteRejected=$true}
+    $builtinActions=Get-AtaraxiaModelParameterPresetCapabilities (Get-AtaraxiaModelParameterPreset $settings 'qwen3_5_instruct_general');$userActions=Get-AtaraxiaModelParameterPresetCapabilities (Get-AtaraxiaModelParameterPreset $settings 'user-private')
+    Assert-True ($builtinSaveRejected -and $builtinDeleteRejected -and (ConvertTo-Json -InputObject $settings -Depth 60 -Compress) -ceq $builtinBefore -and -not $builtinActions.can_overwrite -and -not $builtinActions.can_delete -and $builtinActions.can_save_as -and $userActions.can_overwrite -and $userActions.can_delete) 'Built-in presets allowed overwrite/deletion, changed state after rejection, or did not expose the expected action capabilities.'
     Rename-AtaraxiaModelParameterPreset $settings 'user-private' 'Updated private'|Out-Null
     Remove-AtaraxiaModelParameterPreset $settings 'user-private'|Out-Null
     Assert-True (@($settings.parameter_presets|Where-Object{$_.origin -eq 'builtin'}).Count -eq @($catalog.presets).Count) 'Mutating user presets modified or removed built-in presets.'
@@ -866,7 +871,8 @@ Test-Case 'GUI themes provide modern portable light and dark palettes' {
         $secondaryContrast=Get-AtaraxiaContrastRatio $palette.secondary_text $palette.surface
         Assert-True ($surfaceContrast -ge 7 -and $secondaryContrast -ge 4.5) "Theme input text contrast is too low: $mode/$surfaceContrast/$secondaryContrast"
         foreach($key in @('icon','accent_text')){$color=[string]$palette.$key;Assert-True ($color.Substring(1,2) -eq $color.Substring(3,2) -and $color.Substring(3,2) -eq $color.Substring(5,2)) "Theme $key brush is not achromatic: $mode/$color"}
-        Assert-True ($palette.accent -match '^#([0-9A-Fa-f]{2})(?!\1)([0-9A-Fa-f]{2})(?!\1)[0-9A-Fa-f]{2}$') "Theme accent is not chromatic: $mode/$($palette.accent)"
+        $accent=[string]$palette.accent
+        Assert-True ($accent.Substring(1,2) -eq $accent.Substring(3,2) -and $accent.Substring(3,2) -eq $accent.Substring(5,2)) "Theme accent is not achromatic: $mode/$accent"
     }
     Assert-True ((Resolve-AtaraxiaThemeMode 'system' 'dark') -eq 'dark' -and (Resolve-AtaraxiaThemeMode 'light' 'dark') -eq 'light') 'Theme preference does not resolve system and explicit modes.'
     $initial=New-AtaraxiaGuiThemeState
@@ -942,12 +948,13 @@ Test-Case 'Model selection paths and slider properties support Windows PowerShel
 Test-Case 'GUI model parameter editor state tracks loading dirty and save transitions' {
     . (Join-Path $projectRoot 'scripts/GuiModelParameterEditorState.ps1')
     $state=New-AtaraxiaModelParameterEditorState
-    Assert-True (-not $state.initialized -and -not $state.dirty -and -not $state.loading -and $state.active_preset_id -eq '') 'Model parameter editor state did not initialize cleanly.'
+    Assert-True (-not $state.initialized -and -not $state.dirty -and -not $state.loading -and $state.active_preset_id -eq '' -and $state.active_preset_origin -eq '') 'Model parameter editor state did not initialize cleanly.'
     $state=Set-AtaraxiaModelParameterEditorLoading $state $true
     Assert-True ($state.loading -and -not (Test-AtaraxiaModelParameterEditorChangeAllowed $state)) 'Model selector changes were not suppressed during programmatic loading.'
     $state=Set-AtaraxiaModelParameterEditorLoading $state $false
     Assert-True (Test-AtaraxiaModelParameterEditorChangeAllowed $state) 'Model selector changes remained suppressed after loading.'
-    $state=Set-AtaraxiaModelParameterEditorPreset $state 'default';Assert-True ($state.active_preset_id -eq 'default') 'Active parameter preset selection was not tracked in editor state.'
+    $state=Set-AtaraxiaModelParameterEditorPreset $state 'default' 'builtin';Assert-True ($state.active_preset_id -eq 'default' -and $state.active_preset_origin -eq 'builtin' -and -not (Test-AtaraxiaModelParameterEditorOverwriteAllowed $state)) 'Active built-in preset ownership was not tracked or still allows overwrite.'
+    $state=Set-AtaraxiaModelParameterEditorPreset $state 'personal' 'user';Assert-True ((Test-AtaraxiaModelParameterEditorOverwriteAllowed $state) -and $state.active_preset_origin -eq 'user') 'A user preset did not allow overwrite after selection.'
     $state=Set-AtaraxiaModelParameterEditorDirty $state $true;$state=Set-AtaraxiaModelParameterEditorInitialized $state $true
     Assert-True ($state.dirty -and $state.initialized) 'Editor changes or initialization were not recorded.'
     $state=Set-AtaraxiaModelParameterEditorDirty $state $false
@@ -1097,9 +1104,10 @@ Assert-True ($gui -match 'ProjectDrawer' -and $gui -notmatch 'ProjectSelector|Sw
     Assert-True ($guiApplication -match 'Resolve-AtaraxiaGuiSessionTaskPath' -and $guiApplication -match 'Get-AtaraxiaGuiProcessUpdate' -and $guiApplication -notmatch 'Windows\.(Controls|Media|Visibility)') 'GUI application logic is coupled to WPF instead of being independently testable.'
     Assert-True ($gui -match 'ThemeSelector' -and $gui -match 'Apply-AtaraxiaTheme' -and $gui -match 'Get-AtaraxiaWindowsSystemTheme') 'GUI does not provide system, light, and dark theme selection.'
     $themeAdapter=Get-Content -Raw (Join-Path $projectRoot 'scripts/adapters/WpfThemeAdapter.ps1');$guiComposition=Get-Content -Raw (Join-Path $projectRoot 'scripts/Start-AtaraxiaGui.ps1');Assert-True ($themeAdapter -match 'Set-AtaraxiaWpfThemeResources' -and $themeAdapter -notmatch 'Windows\.(Media|Controls)' -and $guiComposition -match 'Set-AtaraxiaWpfThemeResources \$window\.Resources' -and $guiComposition -notmatch '\$keys=@\{app_background=') 'Theme resource mapping remains in the GUI composition root instead of its adapter.'
-    Assert-True ($gui -match 'KoboldToggle' -and $gui -match 'KoboldStatusDot' -and $gui -match 'Start-KoboldCppFromGui' -and $gui -match 'Stop-KoboldCppFromGui' -and $gui -match 'Get-KoboldCppLaunchArguments' -and $gui -match '#2E7D32' -and $gui -match '#C62828') 'GUI does not launch/stop KoboldCpp and color its API connection state.'
+    Assert-True ($gui -match 'KoboldToggle' -and $gui -match 'KoboldStatusDot' -and $gui -match 'Start-KoboldCppFromGui' -and $gui -match 'Stop-KoboldCppFromGui' -and $gui -match 'Get-KoboldCppLaunchArguments' -and $gui -match '#555555' -and $gui -match '#BBBBBB') 'GUI does not launch/stop KoboldCpp and color its API connection state.'
     Assert-True ($gui -match 'Start-KoboldCppAcquisitionIfMissing' -and $gui -match 'Test-AtaraxiaStoreFile \$executable \$script:guiJsonFileStore' -and $gui -match 'Initialize-KoboldCpp\.ps1' -and $gui -match 'RedirectStandardOutput' -and $gui -match 'Complete-KoboldCppAcquisitionIfFinished') 'GUI does not acquire a missing KoboldCpp executable asynchronously through the separate initializer.'
     $modelFileAdapter=Get-Content -Raw (Join-Path $projectRoot 'scripts/adapters/ModelFileSystemAdapter.ps1');Assert-True ($gui -match 'ModelFileSelector' -and $gui -match 'Get-AtaraxiaAvailableModels' -and $gui -match 'Save-AtaraxiaSelectedModel' -and $gui -match 'Get-KoboldCppEffectiveSettings' -and $gui -match 'Save-KoboldCppSettings' -and $gui -match 'Get-AtaraxiaModelFiles \$directory \$dependencies' -and $gui -notmatch "-Filter '\*\.gguf' -Recurse" -and $gui -notmatch 'Get-KoboldCppModelSettings|ChangeExtension\(\$ModelPath' -and $gui -match 'Save-AtaraxiaModelParameterPresetAs' -and $gui -match 'Rename-AtaraxiaCurrentModelParameterPreset' -and $gui -match 'Remove-AtaraxiaCurrentModelParameterPreset' -and $modelFileAdapter -match 'function Get-AtaraxiaModelFiles' -and $modelFileAdapter -match 'ReparsePoint' -and $gui -match 'Set-AtaraxiaModelParameterEditorLoading.*\$true;try\{Refresh-AtaraxiaModelSelector\}') 'GUI does not discover local GGUF files through the injectable adapter or manage shared parameter presets without sidecar settings.'
+    Assert-True ($gui -match 'Get-AtaraxiaModelParameterPresetCapabilities' -and $gui -match "'save_parameter_preset_enabled'" -and $gui -match "'delete_parameter_preset_enabled'" -and $gui -match 'Test-AtaraxiaModelParameterEditorOverwriteAllowed') 'The GUI does not disable built-in preset overwrite/delete or guard automatic save paths.'
     Assert-True ($gui -match 'KoboldRestart' -and $gui -match 'Restart-KoboldCppFromGui' -and $gui -match 'gui_kobold_restart_requires_managed' -and $gui -match 'gui_kobold_restart_port_busy') 'GUI cannot safely restart its managed KoboldCpp process.'
     Assert-True ($parameterAdapter -match 'Register-AtaraxiaGuiViewAction \$Port \$sliderTarget ''value_change''' -and $parameterAdapter -match 'Register-AtaraxiaGuiViewAction \$Port \$inputTarget ''text_change''' -and $parameterAdapter -match 'Register-AtaraxiaGuiViewAction \$Port \$inputTarget ''lost_focus''' -and $parameterAdapter -match '\$GetInputResult' -and $parameterAdapter -match '\$GetStepValue' -and $guiScript -match '\$getInputResult=\$\{function:Get-AtaraxiaModelParameterInputResult\}' -and $parameterAdapter -notmatch '\$slider\.Add_ValueChanged|\$input\.Add_TextChanged|\$input\.Add_LostFocus|\$sender\.TagData\.(min|max|step)') 'Dynamic model parameter events or validation rules bypass the view port and model contract.'
     Assert-True ($gui -match 'x:Name="NewSession"[^>]*ToolTip="New session"' -and $gui -match '<Path Data="M4,1 H12 L16,5 V16 H4 Z M12,1 V5 H16 M10,8 V14 M7,11 H13"' -and $gui -match "new_session='gui_new_session'" -and $wpfViewAdapter -match 'new_session=@\(''ToolTip'',''tooltips\.new_session''\)') 'New session action is not an icon button with a localized tooltip.'
@@ -1201,14 +1209,14 @@ Test-Case 'GUI request persistence commits related files or compensates partial 
     . (Join-Path $projectRoot 'scripts/GuiRequestApplication.ps1')
     $taskPath='memory://session/task';$metadataPath='memory://session/metadata';$conversationPath='memory://session/conversation';$journalPath='memory://session/request-transaction.json'
     $files=@{};$files[$taskPath]=[pscustomobject]@{goal='old goal';name='task'};$files[$metadataPath]=[pscustomobject]@{artifact_type='session';updated_at='2026-01-01T00:00:00Z'}
-    $state=[pscustomobject]@{files=$files;writes=[System.Collections.Generic.List[string]]::new();fail_path='';fail_once=$false;rollback_fail_path=''}
+    $state=[pscustomobject]@{files=$files;writes=[System.Collections.Generic.List[string]]::new();fail_path='';fail_once=$false;rollback_fail_path='';remove_fail_path='';remove_fail_once=$false}
     $read={param($Path)if(-not $state.files.ContainsKey($Path)){throw "missing: $Path"};ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $state.files[$Path] -Depth 100)}.GetNewClosure()
     $write={param($Path,$Value)$state.writes.Add($Path)|Out-Null;$state.files[$Path]=ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $Value -Depth 100);if($Path -ceq $state.fail_path -and -not $state.fail_once){$state.fail_once=$true;throw 'simulated write failure'};if($Path -ceq $state.rollback_fail_path -and $state.fail_once){throw 'simulated rollback failure'}}.GetNewClosure()
-    $exists={param($Path)$state.files.ContainsKey($Path)}.GetNewClosure();$remove={param($Path)$state.files.Remove($Path)|Out-Null}.GetNewClosure();$now={return [DateTime]::Parse('2026-04-05T06:07:08Z').ToUniversalTime()}
+    $exists={param($Path)$state.files.ContainsKey($Path)}.GetNewClosure();$remove={param($Path)$state.files.Remove($Path)|Out-Null;if($Path -ceq $state.remove_fail_path -and -not $state.remove_fail_once){$state.remove_fail_once=$true;$state.fail_once=$true;throw 'simulated delete failure after removal'}}.GetNewClosure();$now={return [DateTime]::Parse('2026-04-05T06:07:08Z').ToUniversalTime()}
     $dependencies=New-AtaraxiaGuiRequestPersistenceDependencies $read $write $exists $remove $now
     $saved=Save-AtaraxiaGuiRequestTransaction $taskPath $metadataPath $conversationPath $journalPath 'new request' $dependencies
     $targetWriteOrder=@($state.writes|Where-Object{$_ -ne $journalPath})
-    Assert-True ($saved.task.goal -eq 'new request' -and $saved.conversation.entries[0].body -eq 'new request' -and $saved.conversation.entries[0].timestamp -eq $saved.session.updated_at -and ($targetWriteOrder -join ',') -eq "$taskPath,$metadataPath,$conversationPath") 'GUI request persistence did not save task, session timestamp, and conversation with one timestamp in commit order.'
+    Assert-True ($saved.task.goal -eq 'new request' -and $saved.conversation.entries[0].body -eq 'new request' -and $saved.conversation.entries[0].timestamp -eq $saved.session.updated_at -and ($targetWriteOrder -join ',') -eq "$taskPath,$metadataPath,$conversationPath" -and -not $state.files.ContainsKey($journalPath)) 'GUI request persistence did not save task, session timestamp, and conversation with one timestamp, or left its journal after commit.'
     $state.files[$conversationPath]=[pscustomobject]@{schema_version=1;artifact_type='conversation';entries=@([pscustomobject]@{kind='user_query';body='old request';timestamp='2026-01-01T00:00:00Z'},[pscustomobject]@{kind='assistant_report';body='old answer'})};$state.files[$taskPath].goal='old request';$state.files[$metadataPath].updated_at='2026-01-01T00:00:00Z';$beforeTask=ConvertTo-Json $state.files[$taskPath] -Depth 20 -Compress;$beforeMetadata=ConvertTo-Json $state.files[$metadataPath] -Depth 20 -Compress;$beforeConversation=ConvertTo-Json $state.files[$conversationPath] -Depth 20 -Compress;$state.fail_path=$conversationPath;$state.fail_once=$false;$state.writes.Clear();$failed=$false;$failureMessage=''
     try{$null=Save-AtaraxiaGuiRequestTransaction $taskPath $metadataPath $conversationPath $journalPath 'replacement' $dependencies -ReplaceLatest}catch{$failureMessage=$_.Exception.Message;$failed=$true}
     Assert-True ($failed -and $failureMessage -match 'simulated write failure' -and (ConvertTo-Json $state.files[$taskPath] -Depth 20 -Compress) -ceq $beforeTask -and (ConvertTo-Json $state.files[$metadataPath] -Depth 20 -Compress) -ceq $beforeMetadata -and (ConvertTo-Json $state.files[$conversationPath] -Depth 20 -Compress) -ceq $beforeConversation) 'A failed conversation write left the task goal, session timestamp, or conversation branch partially updated.'
@@ -1218,12 +1226,40 @@ Test-Case 'GUI request persistence commits related files or compensates partial 
     Assert-True ($state.files.ContainsKey($journalPath) -and $state.files[$journalPath].state -eq 'pending' -and -not $state.files.ContainsKey($conversationPath)) 'A failed compensation did not retain its pending journal for restart recovery.'
     $state.rollback_fail_path='';$state.fail_path='';$recovered=Resolve-AtaraxiaGuiRequestTransaction $taskPath $metadataPath $conversationPath $journalPath $dependencies
     Assert-True ($recovered.recovered -and (ConvertTo-Json $state.files[$metadataPath] -Depth 20 -Compress) -ceq $beforeMetadata -and -not $state.files.ContainsKey($conversationPath) -and -not $state.files.ContainsKey($journalPath)) 'Restart recovery did not restore pre-transaction state and remove the completed journal.'
+    $malformedJournal=[pscustomobject]@{schema_version=1;state='committed'};$state.files[$journalPath]=$malformedJournal;$state.writes.Clear();$invalidJournalRejected=$false
+    try{$null=Resolve-AtaraxiaGuiRequestTransaction $taskPath $metadataPath $conversationPath $journalPath $dependencies}catch{$invalidJournalRejected=$true}
+    Assert-True ($invalidJournalRejected -and $state.writes.Count -eq 0 -and $state.files[$journalPath].state -eq 'committed') 'Malformed transaction journal was applied, rewritten, or discarded.'
+    $state.files.Remove($journalPath)|Out-Null;$state.remove_fail_path=$journalPath;$state.remove_fail_once=$false;$state.rollback_fail_path=$metadataPath;$state.fail_once=$false;$deleteFailureMessage=''
+    try{$null=Save-AtaraxiaGuiRequestTransaction $taskPath $metadataPath $conversationPath $journalPath 'delete-boundary' $dependencies}catch{$deleteFailureMessage=$_.Exception.Message}
+    Assert-True ($deleteFailureMessage -match 'simulated delete failure' -and $deleteFailureMessage -match 'Rollback also failed' -and $state.files.ContainsKey($journalPath) -and $state.files[$journalPath].state -eq 'pending') 'A journal delete that took effect before throwing left partial data without a recovery record.'
+    $state.remove_fail_path='';$state.rollback_fail_path='';$null=Resolve-AtaraxiaGuiRequestTransaction $taskPath $metadataPath $conversationPath $journalPath $dependencies
+    $temp=Join-Path ([IO.Path]::GetTempPath()) ('ataraxia-request-recovery-'+[guid]::NewGuid().ToString('N'));New-Item -ItemType Directory -Path $temp -Force|Out-Null;$diskTask=Join-Path $temp 'task.json';$diskMetadata=Join-Path $temp 'session.json';$diskConversation=Join-Path $temp 'conversation.json';$diskJournal=Join-Path $temp 'request-transaction.json'
+    try{
+        $oldTask=[pscustomobject]@{goal='prior';name='sample';working_directory=$temp};$oldMetadata=[pscustomobject]@{artifact_type='session';id='session-test';updated_at='2026-01-01T00:00:00Z'}
+        Write-AtaraxiaJsonStoreFile $diskTask $oldTask;$null=Write-AtaraxiaJsonStoreFile $diskMetadata $oldMetadata
+        $pending=[pscustomobject][ordered]@{schema_version=1;state='pending';task_before=$oldTask;session_before=$oldMetadata;conversation_existed=$false;conversation_before=$null}
+        Write-AtaraxiaJsonStoreFile $diskJournal $pending
+        Write-AtaraxiaJsonStoreFile $diskTask ([pscustomobject]@{goal='interrupted';name='sample';working_directory=$temp});Write-AtaraxiaJsonStoreFile $diskMetadata ([pscustomobject]@{artifact_type='session';id='session-test';updated_at='2026-04-05T06:07:08Z'});Write-AtaraxiaJsonStoreFile $diskConversation ([pscustomobject]@{schema_version=1;artifact_type='conversation';entries=@([pscustomobject]@{kind='user_query';body='interrupted';timestamp='2026-04-05T06:07:08Z'})})
+        $diskDeps=New-AtaraxiaGuiRequestPersistenceDependencies {param($Path)Read-AgentJsonFile $Path} {param($Path,$Value)Write-AtaraxiaJsonStoreFile $Path $Value} {param($Path)(Test-Path -LiteralPath $Path -PathType Leaf)} {param($Path)if(Test-Path -LiteralPath $Path -PathType Leaf){[IO.File]::Delete($Path)}} {return [DateTime]::UtcNow}
+        $diskResult=Resolve-AtaraxiaGuiRequestTransaction $diskTask $diskMetadata $diskConversation $diskJournal $diskDeps
+        $restoredTask=Read-AgentJsonFile $diskTask;$restoredMetadata=Read-AgentJsonFile $diskMetadata;$conversationRemains=Test-Path -LiteralPath $diskConversation;$journalRemains=Test-Path -LiteralPath $diskJournal
+        Assert-True ($diskResult.recovered -and $restoredTask.goal -eq 'prior' -and ([DateTime]$restoredMetadata.updated_at).ToUniversalTime().ToString('yyyy-MM-dd') -eq '2026-01-01' -and -not $conversationRemains -and -not $journalRemains) "Restart recovery did not replay its persisted journal: recovered=$($diskResult.recovered), goal=$($restoredTask.goal), updated=$($restoredMetadata.updated_at), conversation=$conversationRemains, journal=$journalRemains."
+    }finally{Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue}
+}
+
+Test-Case 'GUI request transaction journals are preserved instead of automatically repaired' {
+    . (Join-Path $projectRoot 'scripts/StructuredData.ps1')
+    $path=Join-Path ([IO.Path]::GetTempPath()) ('request-transaction-'+[guid]::NewGuid().ToString('N')+'.json');Register-AgentJsonRepairKind $path 'journal'
+    $proposal=New-AgentJsonRepairProposal $path ([Text.UTF8Encoding]::new($false).GetBytes('{"schema_version":1,"state":'))
+    Assert-True (-not $proposal.repairable -and $proposal.kind -eq 'journal') 'A transaction journal with incomplete data was offered speculative repair.'
 }
 
 Test-Case 'GUI request submission uses the transactional persistence application' {
     $source=Get-Content -LiteralPath (Join-Path $projectRoot 'scripts/Start-AtaraxiaGui.ps1') -Raw -Encoding UTF8
     $submit=[regex]::Match($source,'(?s)function Start-AtaraxiaProcess\s*\{.*?\r?\n\}').Value
     Assert-True ($submit -match 'Save-AtaraxiaGuiRequestTransaction' -and $submit -notmatch 'Add-AtaraxiaRequest|Touch-AtaraxiaSession|\$task\.goal\s*=') 'GUI request submission bypasses its transaction coordinator or persists related files independently.'
+    $load=[regex]::Match($source,'(?s)function Load-AtaraxiaTask\([^\r\n]*\)\s*\{.*?\r?\n\}').Value
+    Assert-True ($load -match 'Resolve-AtaraxiaGuiRequestTransaction[^\r\n]*\r?\n\s*\$task=Read-AtaraxiaGuiJsonFile \$Path') 'GUI session loading does not recover its transaction journal before reading task state.'
 }
 
 Test-Case 'Session creation uses injected filesystem clock and identifier' {
@@ -1895,23 +1931,25 @@ Test-Case 'Documentation uses Ataraxia and domain independent requirements' {
     Assert-True ($readme.StartsWith('# Ataraxia') -and $readme -match 'Invoke-Agent\.ps1') 'README does not describe Ataraxia generic CLI.'
     Assert-True ($spec -match '特定のドメインに限定しない' -and $spec -notmatch 'Invoke-NovelWriter') 'Specification retains domain-specific workflow assumptions.'
     Assert-True ($spec.StartsWith('# Ataraxia 技術仕様書') -and $spec -notmatch '(?m)^## (Purpose|Entry points|Domain-independent workflow|Workspace changes and commands|Context and local resource assumptions|Reports and GUI behavior|Configuration and dependencies|Development requirements)$') 'Technical specification prose and section headings are not Japanese.'
-    Assert-True ($spec -match '(?m)^## 用語定義$' -and $spec -match '\| 用語 \| 定義 \| 対応する識別子・保存先 \| 表記規則 \|' -and $spec -match '\| セッション \|' -and $spec -match '\| 作業対象 \|' -and $spec -match '\| ワークフロー段階 \|') 'Project terminology and canonical usage are not defined in a table after the overview.'
+    Assert-True ($spec -match '(?m)^## 用語定義\r?$' -and $spec -match '\| 用語 \| 定義 \| 対応する識別子・保存先 \| 表記規則 \|' -and $spec -match '\| セッション \|' -and $spec -match '\| 作業対象 \|' -and $spec -match '\| ワークフロー段階 \|') 'Project terminology and canonical usage are not defined in a table after the overview.'
     foreach($roleId in @('core','planner','researcher','executor','reviewer','improver','router','verifier','security_reviewer','impact_reviewer','context_compressor','reporter','session_namer')){Assert-True ($spec -match [regex]::Escape($roleId) -and $spec -match ([regex]::Escape($roleId)+'.svg')) "Specification role table is missing detail for $roleId."}
     Assert-True ($policy -match 'テスト駆動開発') 'Development policy no longer states TDD.'
-    Assert-True ($spec -match '(?m)^### 単体テスト設計方法論$' -and $spec -match '振る舞いを特定する' -and $spec -match '正常系、境界値、異常系' -and $spec -match 'アダプターとして注入する' -and $spec -match '行カバレッジ' -and $spec -match '(?m)^\| 単体テスト \|' -and $spec -match '(?m)^\| 契約テスト \|' -and $spec -match '(?m)^\| 統合テスト \|') 'Specification is missing the test selection, dependency isolation, coverage, or test-layer methodology.'
+    Assert-True ($spec -match '(?m)^### 単体テスト設計方法論\r?$' -and $spec -match '振る舞いを特定する' -and $spec -match '正常系、境界値、異常系' -and $spec -match 'アダプターとして注入する' -and $spec -match '行カバレッジ' -and $spec -match '(?m)^\| 単体テスト \|' -and $spec -match '(?m)^\| 契約テスト \|' -and $spec -match '(?m)^\| 統合テスト \|') 'Specification is missing the test selection, dependency isolation, coverage, or test-layer methodology.'
     Assert-True ($policy -match '単体テストはヘッドレスで実行する' -and $policy -match '正常系、境界値、拒否・不正入力') 'Agent development instructions do not enforce headless GUI unit tests and behavior-based test cases.'
-    Assert-True ($spec -match '(?m)^## 設計原則と段階的再設計$' -and $spec -match '高凝集' -and $spec -match '依存性逆転' -and $spec -match 'composition root' -and $spec -match '大規模な一括書き換えを避ける') 'Architecture policy is missing abstraction, cohesion, dependency inversion, composition, or incremental migration rules.'
-    foreach($jsonContract in @('config.example.json','koboldcpp-settings.json','agent-harness.json','role-contracts.json','gui-dialog-contracts.json','project.json','session.json','conversation.json','state.json','run-changes.json','.task.json','sysprompt/*.json','ja.json','en.json','startup_parameters','request_parameters','response_format','history_entry')){Assert-True ($spec.Contains($jsonContract)) "Technical specification JSON catalog is missing a structure: $jsonContract"}
+    Assert-True ($policy -match 'UTF-8 BOM' -and $policy -match 'Windows PowerShell 5\.1') 'Agent development instructions do not preserve PowerShell 5.1 script encoding compatibility.'
+    Assert-True ($policy -match 'ウィンドウの可視性' -and $policy -match '成功扱いにせず' -and $policy -match '対話可能なWindowsデスクトップで再検証する') 'Agent development instructions do not define how to handle GUI integration failures caused by the host desktop.'
+    Assert-True ($spec -match '(?m)^## 設計原則と段階的再設計\r?$' -and $spec -match '高凝集' -and $spec -match '依存性逆転' -and $spec -match 'composition root' -and $spec -match '大規模な一括書き換えを避ける') 'Architecture policy is missing abstraction, cohesion, dependency inversion, composition, or incremental migration rules.'
+    foreach($jsonContract in @('config.example.json','koboldcpp-settings.json','agent-harness.json','role-contracts.json','gui-dialog-contracts.json','project.json','session.json','conversation.json','request-transaction.json','state.json','run-changes.json','.task.json','sysprompt/*.json','ja.json','en.json','startup_parameters','request_parameters','response_format','history_entry')){Assert-True ($spec.Contains($jsonContract)) "Technical specification JSON catalog is missing a structure: $jsonContract"}
     Assert-True ($policy -match '高凝集・疎結合' -and $policy -match '依存性逆転' -and $policy -match 'Composition root' -and $policy -match '縦切り') 'Contributor instructions do not enforce the project architecture principles.'
     $architecturePath=Join-Path $projectRoot 'docs/ARCHITECTURE_REDESIGN.md'
     Assert-True (Test-Path -LiteralPath $architecturePath -PathType Leaf) 'Architecture redesign map is missing.'
     $architecture=Get-Content -Raw $architecturePath
-    Assert-True ($architecture -match 'scripts/domain/Workflow\.ps1' -and $architecture -match 'scripts/application/AgentRunner\.ps1' -and $architecture -match 'scripts/ports/' -and $architecture -match 'scripts/adapters/' -and $architecture -match 'scripts/presentation/AtaraxiaGui\.ps1' -and $architecture -match '(?m)^## 移行手順$') 'Architecture map does not define cohesive layers and an incremental migration sequence.'
+    Assert-True ($architecture -match 'scripts/domain/Workflow\.ps1' -and $architecture -match 'scripts/application/AgentRunner\.ps1' -and $architecture -match 'scripts/ports/' -and $architecture -match 'scripts/adapters/' -and $architecture -match 'scripts/presentation/AtaraxiaGui\.ps1' -and $architecture -match '(?m)^## 移行手順\r?$') 'Architecture map does not define cohesive layers and an incremental migration sequence.'
     $requirements=Get-Content -Raw (Join-Path $projectRoot 'docs/REQUIREMENTS.md')
     $knowledge=Get-Content -Raw (Join-Path $projectRoot 'docs/ENGINEERING_KNOWLEDGE.md')
     $policy=Get-Content -Raw (Join-Path $projectRoot 'AGENTS.md')
     Assert-True ($requirements -match '(?m)^\| REQ-[0-9]{3} \|' -and $knowledge -match '(?m)^\| KNW-[0-9]{3} \|' -and $knowledge -notmatch '(?m)^\| K-[0-9]{3} \|' -and $architecture -match '(?m)^\| MIG-[0-9]{2} \|' -and $architecture -match '(?m)^\| IMP-[0-9]{3} \|' -and $policy -match '資料項目の安定識別子' -and $policy -match 'KNW-NNN') 'Cross-document identifiers do not use stable type prefixes.'
-    Assert-True ($requirements -match '(?m)^\| REQ-011 \| 重要 \| 受け入れ済み \|' -and $spec -match '(?m)^### 利用者データ JSON の修復$' -and $spec -match '拒否された場合は原本に一切書き込まず' -and $spec -match '原子的に置換' -and $spec -match '差分ジャーナル') 'User-approved JSON recovery requirements do not define safe, schema-aware, information-preserving repair.'
+    Assert-True ($requirements -match '(?m)^\| REQ-011 \| 重要 \| 受け入れ済み \|' -and $spec -match '(?m)^### 利用者データ JSON の修復\r?$' -and $spec -match '拒否された場合は原本に一切書き込まず' -and $spec -match '原子的に置換' -and $spec -match '差分ジャーナル') 'User-approved JSON recovery requirements do not define safe, schema-aware, information-preserving repair.'
 }
 
 Test-Case 'Engineering knowledge is tracked in a structured Markdown table' {

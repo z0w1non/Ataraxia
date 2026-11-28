@@ -100,7 +100,7 @@ foreach ($name in @('ProjectDrawer','SettingsPanel','ConversationPage','Settings
 $script:wpfSmoothExpanderRegistry=New-AtaraxiaWpfSmoothExpanderRegistry
 $script:guiLocalizedPresentation=New-AtaraxiaGuiLocalizedPresentation {param($Key)Get-AppText $Key}
 $script:guiSessionMenu=New-AtaraxiaWpfSessionContextMenu $OtherSession $script:guiLocalizedPresentation
-$script:guiViewPort=New-AtaraxiaWpfGuiViewPort @{conversation=$Conversation;sessions=$SessionSelector;models=$ModelFileSelector;status=$Status;session_selector=$SessionSelector;theme_selector=$ThemeSelector;model_selector=$ModelFileSelector;refresh_models=$RefreshModels;parameter_presets=$ParameterPresetSelector;save_parameter_preset=$SaveParameterPreset;save_as_parameter_preset=$SaveAsParameterPreset;rename_parameter_preset=$RenameParameterPreset;delete_parameter_preset=$DeleteParameterPreset;new_session=$NewSession;create_task=$CreateTask;edit_last=$EditLast;run_task=$RunTask;goal=$Goal;conversation_scroll=$ConversationScrollViewer;scroll_latest=$ScrollToLatest;main_window=$window;conversation_page=$ConversationPage;project_drawer=$ProjectDrawer;settings_panel=$SettingsPanel;recent_sessions_header=$RecentSessionsHeaderButton;recent_sessions_group=$RecentSessionsExpander;new_project=$NewProject;settings_toggle=$SettingsToggle;close_settings=$CloseSettings;project_prompt=$ProjectPromptButton;session_prompt_button=$SessionPromptButton;other_session=$OtherSession;copy_session_id_menu=$script:guiSessionMenu.copy_session_id;rename_session_menu=$script:guiSessionMenu.rename_session;session_prompt_menu=$script:guiSessionMenu.session_prompt;browse_config=$BrowseConfig;browse_task=$BrowseTask;browse_workspace=$BrowseWorkspace;kobold_toggle=$KoboldToggle;kobold_restart=$KoboldRestart;dispatcher=$window.Dispatcher} @{status='Text';conversation_page='Visibility';project_drawer='Visibility';settings_panel='Visibility';rename_session_menu='IsEnabled';delete_parameter_preset='ToolTip'} -InputHeightCalculator ${function:Get-AtaraxiaGuiInputHeight}
+$script:guiViewPort=New-AtaraxiaWpfGuiViewPort @{conversation=$Conversation;sessions=$SessionSelector;models=$ModelFileSelector;status=$Status;session_selector=$SessionSelector;theme_selector=$ThemeSelector;model_selector=$ModelFileSelector;refresh_models=$RefreshModels;parameter_presets=$ParameterPresetSelector;save_parameter_preset=$SaveParameterPreset;save_parameter_preset_enabled=$SaveParameterPreset;save_as_parameter_preset=$SaveAsParameterPreset;rename_parameter_preset=$RenameParameterPreset;delete_parameter_preset=$DeleteParameterPreset;delete_parameter_preset_enabled=$DeleteParameterPreset;new_session=$NewSession;create_task=$CreateTask;edit_last=$EditLast;run_task=$RunTask;goal=$Goal;conversation_scroll=$ConversationScrollViewer;scroll_latest=$ScrollToLatest;main_window=$window;conversation_page=$ConversationPage;project_drawer=$ProjectDrawer;settings_panel=$SettingsPanel;recent_sessions_header=$RecentSessionsHeaderButton;recent_sessions_group=$RecentSessionsExpander;new_project=$NewProject;settings_toggle=$SettingsToggle;close_settings=$CloseSettings;project_prompt=$ProjectPromptButton;session_prompt_button=$SessionPromptButton;other_session=$OtherSession;copy_session_id_menu=$script:guiSessionMenu.copy_session_id;rename_session_menu=$script:guiSessionMenu.rename_session;session_prompt_menu=$script:guiSessionMenu.session_prompt;browse_config=$BrowseConfig;browse_task=$BrowseTask;browse_workspace=$BrowseWorkspace;kobold_toggle=$KoboldToggle;kobold_restart=$KoboldRestart;dispatcher=$window.Dispatcher} @{status='Text';conversation_page='Visibility';project_drawer='Visibility';settings_panel='Visibility';rename_session_menu='IsEnabled';save_parameter_preset_enabled='IsEnabled';delete_parameter_preset_enabled='IsEnabled'} -InputHeightCalculator ${function:Get-AtaraxiaGuiInputHeight}
 
 $script:createThemeBrush={param($Hex)$color=[Windows.Media.ColorConverter]::ConvertFromString([string]$Hex);[Windows.Media.SolidColorBrush]::new($color)}.GetNewClosure()
 function Set-AtaraxiaGuiStatusText([object]$Value){Set-AtaraxiaGuiViewValue $script:guiViewPort 'status' $Value}
@@ -198,9 +198,9 @@ function Convert-AtaraxiaRunOutput([string]$Line) {
 }
 function Set-KoboldConnectionIndicator([ValidateSet('connected','disconnected','starting')][string]$State) {
     switch($State){
-        'connected'{$KoboldStatusDot.Fill=[Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#2E7D32'));$KoboldStatusText.Text=Get-AppText 'gui_kobold_connected'}
-        'starting'{$KoboldStatusDot.Fill=[Windows.Media.Brushes]::DarkOrange;$KoboldStatusText.Text=Get-AppText 'gui_kobold_starting'}
-        default{$KoboldStatusDot.Fill=[Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#C62828'));$KoboldStatusText.Text=Get-AppText 'gui_kobold_disconnected'}
+        'connected'{$KoboldStatusDot.Fill=[Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#555555'));$KoboldStatusText.Text=Get-AppText 'gui_kobold_connected'}
+        'starting'{$KoboldStatusDot.Fill=[Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#888888'));$KoboldStatusText.Text=Get-AppText 'gui_kobold_starting'}
+        default{$KoboldStatusDot.Fill=[Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#BBBBBB'));$KoboldStatusText.Text=Get-AppText 'gui_kobold_disconnected'}
     }
     Set-KoboldToggleIcon
     $KoboldRestart.IsEnabled=($null -ne $script:koboldProcess -and -not (Get-AtaraxiaGuiChildProcessStatus $script:koboldProcess).has_exited)
@@ -247,7 +247,7 @@ function Toggle-KoboldCppFromGui {
 }
 function Restart-KoboldCppFromGui {
     $managedRunning=$null -ne $script:koboldProcess -and -not (Get-AtaraxiaGuiChildProcessStatus $script:koboldProcess).has_exited
-    $save={if($script:modelParameterControls.Count -gt 0){Save-AtaraxiaModelParameters}}.GetNewClosure()
+    $save={if($script:modelParameterControls.Count -gt 0 -and (Test-AtaraxiaModelParameterEditorOverwriteAllowed $script:modelParameterEditorState)){Save-AtaraxiaModelParameters}}.GetNewClosure()
     $stop={Stop-KoboldCppFromGui}.GetNewClosure();$probe={Test-KoboldCppConnection}.GetNewClosure()
     $wait={param($milliseconds)Start-Sleep -Milliseconds $milliseconds}.GetNewClosure();$clock={[DateTime]::UtcNow}.GetNewClosure()
     $start={Start-KoboldCppFromGui}.GetNewClosure()
@@ -328,9 +328,9 @@ function Refresh-AtaraxiaModelSelector {
 function Sync-AtaraxiaModelParameterPresetSelector([object]$Settings) {
     $language=[string](Get-AtaraxiaConfig).interface_language
     $items=@(foreach($preset in $Settings.parameter_presets){$name=[string]$preset.name;if([string]$preset.origin -eq 'builtin' -and $language -eq 'English' -and $null -ne $preset.PSObject.Properties['name_en']){$name=[string]$preset.name_en};$suffixKey=if([string]$preset.origin -eq 'user'){'gui_parameter_preset_user_suffix'}elseif([bool]$preset.has_user_override){'gui_parameter_preset_customized_suffix'}else{'gui_parameter_preset_builtin_suffix'};[pscustomobject]@{id=[string]$preset.id;name=($name+' '+(Get-AppText $suffixKey))}})
-    $active=Get-AtaraxiaModelParameterPreset $Settings ([string]$Settings.active_parameter_preset_id);$deleteLabel=if([string]$active.origin -eq 'builtin'){Get-AppText 'gui_parameter_preset_reset'}else{Get-AppText 'gui_parameter_preset_delete'};Set-AtaraxiaGuiViewValue $script:guiViewPort 'delete_parameter_preset' $deleteLabel
+    $active=Get-AtaraxiaModelParameterPreset $Settings ([string]$Settings.active_parameter_preset_id);$capabilities=Get-AtaraxiaModelParameterPresetCapabilities $active;Set-AtaraxiaGuiViewValue $script:guiViewPort 'save_parameter_preset_enabled' ([bool]$capabilities.can_overwrite);Set-AtaraxiaGuiViewValue $script:guiViewPort 'delete_parameter_preset_enabled' ([bool]$capabilities.can_delete)
     $wasLoading=[bool]$script:modelParameterEditorState.loading;$null=Set-AtaraxiaModelParameterEditorLoading $script:modelParameterEditorState $true
-    try{Set-AtaraxiaGuiViewItems $script:guiViewPort 'parameter_presets' $items;$ParameterPresetSelector.SelectedValuePath='id';$ParameterPresetSelector.SelectedValue=[string]$Settings.active_parameter_preset_id;$null=Set-AtaraxiaModelParameterEditorPreset $script:modelParameterEditorState ([string]$Settings.active_parameter_preset_id)}finally{$null=Set-AtaraxiaModelParameterEditorLoading $script:modelParameterEditorState $wasLoading}
+    try{Set-AtaraxiaGuiViewItems $script:guiViewPort 'parameter_presets' $items;$ParameterPresetSelector.SelectedValuePath='id';$ParameterPresetSelector.SelectedValue=[string]$Settings.active_parameter_preset_id;$null=Set-AtaraxiaModelParameterEditorPreset $script:modelParameterEditorState ([string]$Settings.active_parameter_preset_id) ([string]$active.origin)}finally{$null=Set-AtaraxiaModelParameterEditorLoading $script:modelParameterEditorState $wasLoading}
 }
 function Save-AtaraxiaModelParameterPresetSettings([object]$Settings) {
     $config=Get-AtaraxiaConfig;$settingsPath=Get-KoboldCppSettingsPath $config $RuntimeConfig.Text;$presetPath=Get-AtaraxiaUserModelParameterPresetPath;$store=$script:guiJsonStore
@@ -340,7 +340,7 @@ function Save-AtaraxiaModelParameterPresetSettings([object]$Settings) {
 }
 function Save-AtaraxiaSelectedModel {
     $selected=$ModelFileSelector.SelectedItem;if($null -eq $selected){return}
-    if($script:modelParameterEditorState.dirty){Save-AtaraxiaModelParameters}
+    if($script:modelParameterEditorState.dirty -and (Test-AtaraxiaModelParameterEditorOverwriteAllowed $script:modelParameterEditorState)){Save-AtaraxiaModelParameters}
     $settingsPath=Get-KoboldCppSettingsPath (Get-AtaraxiaConfig) $RuntimeConfig.Text;$config=Get-AtaraxiaConfig;$null=Import-KoboldCppSettings $config $RuntimeConfig.Text $script:guiJsonStore;$settings=$config.koboldcpp_base_settings
     $modelDirectory=[string]$settings.paths.model_directory;if(-not [IO.Path]::IsPathRooted($modelDirectory)){$modelDirectory=Join-Path (Split-Path -Parent $PSScriptRoot) $modelDirectory};$modelDirectory=[IO.Path]::GetFullPath($modelDirectory)
     $modelPath=[IO.Path]::GetFullPath([string]$selected.path)
@@ -353,12 +353,16 @@ function Save-AtaraxiaSelectedModel {
 Register-AtaraxiaGuiViewAction $script:guiViewPort 'model_selector' 'selection_change' {if((Test-AtaraxiaModelParameterEditorChangeAllowed $script:modelParameterEditorState) -and $null -ne $ModelFileSelector.SelectedItem){try{Save-AtaraxiaSelectedModel}catch{Report-AtaraxiaGuiError $_ 'select_model'}}}
 Register-AtaraxiaGuiViewAction $script:guiViewPort 'refresh_models' 'activate' {try{$null=Set-AtaraxiaModelParameterEditorLoading $script:modelParameterEditorState $true;Refresh-AtaraxiaModelSelector}finally{$null=Set-AtaraxiaModelParameterEditorLoading $script:modelParameterEditorState $false}}
 $null=Set-AtaraxiaModelParameterEditorLoading $script:modelParameterEditorState $true;try{Refresh-AtaraxiaModelSelector}catch{Report-AtaraxiaGuiError $_ 'refresh_models'}finally{$null=Set-AtaraxiaModelParameterEditorLoading $script:modelParameterEditorState $false}
+function Get-AtaraxiaModelParameterEditorValues {
+    $values=[ordered]@{}
+    foreach($definition in Get-AtaraxiaModelParameterDefinitions){$control=$script:modelParameterControls[$definition.key];if($definition.kind -eq 'string'){$raw=[string]$control.Text;if($definition.key -eq 'stop'){if([string]::IsNullOrWhiteSpace($raw)){$values[$definition.key]=@()}else{$values[$definition.key]=@($raw -split "`r?`n"|Where-Object{$_ -ne ''})}}else{$values[$definition.key]=$raw}}else{$inputResult=Get-AtaraxiaModelParameterInputResult $definition.key $control.Text;if(-not $inputResult.valid){throw $inputResult.error};$values[$definition.key]=$inputResult.value}}
+    return $values
+}
 function Save-AtaraxiaModelParameters {
     $settingsPath=Get-KoboldCppSettingsPath (Get-AtaraxiaConfig) $RuntimeConfig.Text
     $config=Get-AtaraxiaConfig;$null=Import-KoboldCppSettings $config $RuntimeConfig.Text $script:guiJsonStore;$settings=$config.koboldcpp_base_settings
-    $values=[ordered]@{}
-    foreach($definition in Get-AtaraxiaModelParameterDefinitions){$control=$script:modelParameterControls[$definition.key];if($definition.kind -eq 'string'){$raw=[string]$control.Text;if($definition.key -eq 'stop'){if([string]::IsNullOrWhiteSpace($raw)){$values[$definition.key]=@()}else{$values[$definition.key]=@($raw -split "`r?`n"|Where-Object{$_ -ne ''})}}else{$values[$definition.key]=$raw}}else{$inputResult=Get-AtaraxiaModelParameterInputResult $definition.key $control.Text;if(-not $inputResult.valid){throw $inputResult.error};$values[$definition.key]=$inputResult.value}}
     $presetId=[string]$script:modelParameterEditorState.active_preset_id;if([string]::IsNullOrWhiteSpace($presetId)){$presetId=[string]$settings.active_parameter_preset_id}
+    $values=Get-AtaraxiaModelParameterEditorValues
     Save-AtaraxiaModelParameterPresetValues $settings $presetId $values|Out-Null
     $presetPath=Get-AtaraxiaUserModelParameterPresetPath;$store=$script:guiJsonStore;$saveUserPresets={param($Value)Save-AtaraxiaUserModelParameterPresetData $presetPath $Value $store|Out-Null}.GetNewClosure();$saveSharedSettings={param($Value)Save-KoboldCppSettings $settingsPath $Value $store|Out-Null}.GetNewClosure()
     Save-AtaraxiaGuiModelParameterSettings $settings $saveUserPresets $saveSharedSettings|Out-Null
@@ -371,32 +375,34 @@ function Save-AtaraxiaModelParameters {
 function Build-AtaraxiaModelParameterControls {
     $config=Get-AtaraxiaConfig;$null=Import-KoboldCppSettings $config $RuntimeConfig.Text $script:guiJsonStore;$settings=$config.koboldcpp_base_settings;$values=Get-AtaraxiaModelParameterValues $settings;Sync-AtaraxiaModelParameterPresetSelector $settings
     $getText={param($Key)Get-AppText $Key}.GetNewClosure()
-    $onSaveAction={try{Save-AtaraxiaModelParameters}catch{Report-AtaraxiaGuiError $_ 'save_model_parameters'}}.GetNewClosure()
+    $onSaveAction={if(-not(Test-AtaraxiaModelParameterEditorOverwriteAllowed $script:modelParameterEditorState)){return};try{Save-AtaraxiaModelParameters}catch{Report-AtaraxiaGuiError $_ 'save_model_parameters'}}.GetNewClosure()
     $editorHandlers=New-AtaraxiaModelParameterEditorHandlers $script:modelParameterEditorState $onSaveAction
     $onDirty=$editorHandlers.on_dirty;$onSave=$editorHandlers.on_save
     $getInputResult=${function:Get-AtaraxiaModelParameterInputResult};$getStepValue=${function:Get-AtaraxiaModelParameterStepValue}
     $script:modelParameterControls=New-AtaraxiaWpfModelParameterControls -Panel $ParameterPanel -Definitions @(Get-AtaraxiaModelParameterDefinitions) -Values $values -Port $script:guiViewPort -Owner $window -GetText $getText -OnDirty $onDirty -OnSave $onSave -GetInputResult $getInputResult -GetStepValue $getStepValue
 }
 function Save-AtaraxiaModelParameterPresetAs {
-    if($script:modelParameterEditorState.dirty){Save-AtaraxiaModelParameters}
+    $values=$null;if($script:modelParameterEditorState.dirty){$values=Get-AtaraxiaModelParameterEditorValues}
     $name=Show-AtaraxiaInputDialog (Get-AppText 'gui_parameter_preset_name_title') '' (Get-AppText 'gui_parameter_preset_name_message');if($null -eq $name){return};$name=([string]$name).Trim();if([string]::IsNullOrWhiteSpace($name)){return}
     $config=Get-AtaraxiaConfig;$null=Import-KoboldCppSettings $config $RuntimeConfig.Text $script:guiJsonStore;$settings=$config.koboldcpp_base_settings
+    if($null -ne $values){if(Test-AtaraxiaModelParameterEditorOverwriteAllowed $script:modelParameterEditorState){Save-AtaraxiaModelParameters;$config=Get-AtaraxiaConfig;$null=Import-KoboldCppSettings $config $RuntimeConfig.Text $script:guiJsonStore;$settings=$config.koboldcpp_base_settings}else{foreach($key in $values.Keys){$settings.request_parameters|Add-Member -NotePropertyName ([string]$key) -NotePropertyValue $values[$key] -Force}}}
     $preset=New-AtaraxiaModelParameterPreset $settings $name ([guid]::NewGuid().ToString('N'));Save-AtaraxiaModelParameterPresetSettings $settings;$null=Set-AtaraxiaModelParameterEditorPreset $script:modelParameterEditorState ([string]$preset.id);Build-AtaraxiaModelParameterControls
+    $null=Set-AtaraxiaModelParameterEditorDirty $script:modelParameterEditorState $false
 }
 function Rename-AtaraxiaCurrentModelParameterPreset {
-    if($script:modelParameterEditorState.dirty){Save-AtaraxiaModelParameters}
+    if($script:modelParameterEditorState.dirty -and (Test-AtaraxiaModelParameterEditorOverwriteAllowed $script:modelParameterEditorState)){Save-AtaraxiaModelParameters}
     $config=Get-AtaraxiaConfig;$null=Import-KoboldCppSettings $config $RuntimeConfig.Text $script:guiJsonStore;$settings=$config.koboldcpp_base_settings;$id=[string]$settings.active_parameter_preset_id;$current=Get-AtaraxiaModelParameterPreset $settings $id
     $name=Show-AtaraxiaInputDialog (Get-AppText 'gui_parameter_preset_name_title') ([string]$current.name) (Get-AppText 'gui_parameter_preset_name_message');if($null -eq $name){return}
     Rename-AtaraxiaModelParameterPreset $settings $id ([string]$name)|Out-Null;Save-AtaraxiaModelParameterPresetSettings $settings;Build-AtaraxiaModelParameterControls
 }
 function Remove-AtaraxiaCurrentModelParameterPreset {
-    if($script:modelParameterEditorState.dirty){Save-AtaraxiaModelParameters}
+    if(-not(Test-AtaraxiaModelParameterEditorOverwriteAllowed $script:modelParameterEditorState)){return};if($script:modelParameterEditorState.dirty){Save-AtaraxiaModelParameters}
     $config=Get-AtaraxiaConfig;$null=Import-KoboldCppSettings $config $RuntimeConfig.Text $script:guiJsonStore;$settings=$config.koboldcpp_base_settings;$id=[string]$settings.active_parameter_preset_id;$preset=Get-AtaraxiaModelParameterPreset $settings $id
     if([string]$preset.origin -ne 'builtin' -and @($settings.parameter_presets|Where-Object{[string]$_.origin -eq 'user'}).Count -le 1 -and @($settings.parameter_presets|Where-Object{[string]$_.origin -eq 'builtin'}).Count -eq 0){$null=Show-AtaraxiaMessageDialog (Get-AppText 'gui_parameter_preset_last_error') (Get-AppText 'gui_parameter_preset_delete_title') 'warning';return}
-    $confirmTitle=if([string]$preset.origin -eq 'builtin'){Get-AppText 'gui_parameter_preset_reset_title'}else{Get-AppText 'gui_parameter_preset_delete_title'};$confirmKey=if([string]$preset.origin -eq 'builtin'){'gui_parameter_preset_reset_confirm'}else{'gui_parameter_preset_delete_confirm'};$confirm=Show-AtaraxiaMessageDialog (Get-AppText $confirmKey @([string]$preset.name)) $confirmTitle 'question' $true (Get-AppText 'gui_yes') (Get-AppText 'gui_no');if(-not $confirm){return}
+    $confirm=Show-AtaraxiaMessageDialog (Get-AppText 'gui_parameter_preset_delete_confirm' @([string]$preset.name)) (Get-AppText 'gui_parameter_preset_delete_title') 'question' $true (Get-AppText 'gui_yes') (Get-AppText 'gui_no');if(-not $confirm){return}
     Remove-AtaraxiaModelParameterPreset $settings $id|Out-Null;Save-AtaraxiaModelParameterPresetSettings $settings;$null=Set-AtaraxiaModelParameterEditorPreset $script:modelParameterEditorState ([string]$settings.active_parameter_preset_id);Build-AtaraxiaModelParameterControls
 }
-Register-AtaraxiaGuiViewAction $script:guiViewPort 'parameter_presets' 'selection_change' {if(-not(Test-AtaraxiaModelParameterEditorChangeAllowed $script:modelParameterEditorState) -or [string]::IsNullOrWhiteSpace([string]$ParameterPresetSelector.SelectedValue) -or [string]$ParameterPresetSelector.SelectedValue -ceq [string]$script:modelParameterEditorState.active_preset_id){return};try{if($script:modelParameterEditorState.dirty){Save-AtaraxiaModelParameters};$config=Get-AtaraxiaConfig;$null=Import-KoboldCppSettings $config $RuntimeConfig.Text $script:guiJsonStore;$settings=$config.koboldcpp_base_settings;Select-AtaraxiaModelParameterPreset $settings ([string]$ParameterPresetSelector.SelectedValue)|Out-Null;Save-AtaraxiaModelParameterPresetSettings $settings;$null=Set-AtaraxiaModelParameterEditorPreset $script:modelParameterEditorState ([string]$settings.active_parameter_preset_id);Build-AtaraxiaModelParameterControls}catch{Report-AtaraxiaGuiError $_ 'select_parameter_preset';try{$config=Get-AtaraxiaConfig;$null=Import-KoboldCppSettings $config $RuntimeConfig.Text $script:guiJsonStore;Sync-AtaraxiaModelParameterPresetSelector $config.koboldcpp_base_settings}catch{}}}
+Register-AtaraxiaGuiViewAction $script:guiViewPort 'parameter_presets' 'selection_change' {if(-not(Test-AtaraxiaModelParameterEditorChangeAllowed $script:modelParameterEditorState) -or [string]::IsNullOrWhiteSpace([string]$ParameterPresetSelector.SelectedValue) -or [string]$ParameterPresetSelector.SelectedValue -ceq [string]$script:modelParameterEditorState.active_preset_id){return};try{if($script:modelParameterEditorState.dirty -and (Test-AtaraxiaModelParameterEditorOverwriteAllowed $script:modelParameterEditorState)){Save-AtaraxiaModelParameters};$config=Get-AtaraxiaConfig;$null=Import-KoboldCppSettings $config $RuntimeConfig.Text $script:guiJsonStore;$settings=$config.koboldcpp_base_settings;Select-AtaraxiaModelParameterPreset $settings ([string]$ParameterPresetSelector.SelectedValue)|Out-Null;Save-AtaraxiaModelParameterPresetSettings $settings;$null=Set-AtaraxiaModelParameterEditorPreset $script:modelParameterEditorState ([string]$settings.active_parameter_preset_id);Build-AtaraxiaModelParameterControls}catch{Report-AtaraxiaGuiError $_ 'select_parameter_preset';try{$config=Get-AtaraxiaConfig;$null=Import-KoboldCppSettings $config $RuntimeConfig.Text $script:guiJsonStore;Sync-AtaraxiaModelParameterPresetSelector $config.koboldcpp_base_settings}catch{}}}
 Register-AtaraxiaGuiViewAction $script:guiViewPort 'save_parameter_preset' 'activate' {try{Save-AtaraxiaModelParameters;Set-AtaraxiaGuiStatusText (Get-AppText 'gui_parameter_preset_saved')}catch{Report-AtaraxiaGuiError $_ 'save_parameter_preset'}}
 Register-AtaraxiaGuiViewAction $script:guiViewPort 'save_as_parameter_preset' 'activate' {try{Save-AtaraxiaModelParameterPresetAs}catch{Report-AtaraxiaGuiError $_ 'create_parameter_preset'}}
 Register-AtaraxiaGuiViewAction $script:guiViewPort 'rename_parameter_preset' 'activate' {try{Rename-AtaraxiaCurrentModelParameterPreset}catch{Report-AtaraxiaGuiError $_ 'rename_parameter_preset'}}
@@ -418,6 +424,8 @@ function Show-ProjectNameDialog([string]$Title,[string]$InitialValue='') {
 function Show-CommonPromptDialog([string]$Title,[string]$InitialValue) { return Show-AtaraxiaCommonPromptDialog $Title $InitialValue }
 function Load-AtaraxiaTask([string]$Path) {
     if(-not(Test-AtaraxiaStoreFile $Path $script:guiJsonFileStore)){throw "Task file was not found: $Path"}
+    $sessionDirectory=Split-Path -Parent $Path;$metadataPath=Join-Path $sessionDirectory 'session.json';$conversationPath=Join-Path $sessionDirectory 'conversation.json';$journalPath=Join-Path $sessionDirectory 'request-transaction.json'
+    $null=Resolve-AtaraxiaGuiRequestTransaction $Path $metadataPath $conversationPath $journalPath $script:guiRequestPersistence
     $task=Read-AtaraxiaGuiJsonFile $Path
     if($null -eq $task.PSObject.Properties['workflow'] -or $null -eq $task.PSObject.Properties['roles']){throw 'The selected file is not an Ataraxia task.'}
     $null=Set-AtaraxiaGuiScreenTask $script:guiScreenState $Path
@@ -556,8 +564,8 @@ function Start-AtaraxiaProcess {
     Assert-AgentPlainText $cleanRequest 'User query' -MaximumLength 100000 -AllowMultiline
     if(-not [string]::IsNullOrWhiteSpace($script:guiScreenState.pending_session_project)){$null=Materialize-AtaraxiaPendingSession $cleanRequest}
     if([string]::IsNullOrWhiteSpace($script:guiScreenState.task_path)){throw 'Select or create a session before sending a query.'}
-    $sessionDirectory=Split-Path -Parent $script:guiScreenState.task_path;$conversationPath=Join-Path $sessionDirectory 'conversation.json';$metadataPath=Join-Path $sessionDirectory 'session.json'
-    $null=Save-AtaraxiaGuiRequestTransaction $script:guiScreenState.task_path $metadataPath $conversationPath $cleanRequest $script:guiRequestPersistence -ReplaceLatest:$ReplaceLatest
+    $sessionDirectory=Split-Path -Parent $script:guiScreenState.task_path;$conversationPath=Join-Path $sessionDirectory 'conversation.json';$metadataPath=Join-Path $sessionDirectory 'session.json';$journalPath=Join-Path $sessionDirectory 'request-transaction.json'
+    $null=Save-AtaraxiaGuiRequestTransaction $script:guiScreenState.task_path $metadataPath $conversationPath $journalPath $cleanRequest $script:guiRequestPersistence -ReplaceLatest:$ReplaceLatest
     $script:guiScreenState.editing=$false;$Goal.Clear();Refresh-AtaraxiaConversation;Refresh-AtaraxiaSessionSelector;Refresh-ProjectSessionTree
     $runner=Join-Path $PSScriptRoot 'Invoke-Agent.ps1';$hostPath=(Get-Process -Id $PID).Path;$outputPaths=New-AtaraxiaGuiProcessOutputPaths;$script:processStdout=$outputPaths.stdout;$script:processStderr=$outputPaths.stderr
     $launchRequest=New-AtaraxiaGuiAgentLaunchRequest $hostPath $runner $script:guiScreenState.task_path ([IO.Path]::GetFullPath($RuntimeConfig.Text)) $projectRoot $script:processStdout $script:processStderr
@@ -625,7 +633,7 @@ function Wire-AtaraxiaEvents {
     Register-AtaraxiaGuiViewAction $script:guiViewPort 'browse_task' 'activate' {$picked=Show-AtaraxiaPathPicker -Owner $window -Kind file -Title (Get-AppText 'gui_open_task') -InitialDirectory (Get-TaskDirectory) -Patterns @('*.task.json');if($picked){try{Load-AtaraxiaTask $picked}catch{Report-AtaraxiaGuiError $_ 'open_task'}}}
     Register-AtaraxiaGuiViewAction $script:guiViewPort 'browse_workspace' 'activate' {$picked=Show-AtaraxiaPathPicker -Owner $window -Kind folder -Title (Get-AppText 'gui_browse_folder') -InitialDirectory $Workspace.Text;if($picked){$Workspace.Text=$picked}}
     Register-AtaraxiaGuiViewAction $script:guiViewPort 'kobold_toggle' 'activate' {Toggle-KoboldCppFromGui};Register-AtaraxiaGuiViewAction $script:guiViewPort 'kobold_restart' 'activate' {Restart-KoboldCppFromGui}
-    Register-AtaraxiaGuiViewAction $script:guiViewPort 'main_window' 'close' {if($script:modelParameterEditorState.dirty){try{Save-AtaraxiaModelParameters}catch{Report-AtaraxiaGuiError $_ 'save_settings_on_close'}};if($null -ne $script:process){Stop-AtaraxiaRun}}
+    Register-AtaraxiaGuiViewAction $script:guiViewPort 'main_window' 'close' {if($script:modelParameterEditorState.dirty -and (Test-AtaraxiaModelParameterEditorOverwriteAllowed $script:modelParameterEditorState)){try{Save-AtaraxiaModelParameters}catch{Report-AtaraxiaGuiError $_ 'save_settings_on_close'}};if($null -ne $script:process){Stop-AtaraxiaRun}}
     $pollState=[pscustomobject]@{last_poll=[DateTime]::MinValue};$guiInstanceForPolling=$script:guiInstance;$guiViewPortForPolling=$script:guiViewPort
     $pollTick={try{if(Test-AtaraxiaGuiActivationRequested $guiInstanceForPolling){Invoke-AtaraxiaGuiViewOperation $guiViewPortForPolling activate_window 'main_window'};Receive-AtaraxiaProcessOutput;Complete-KoboldCppAcquisitionIfFinished;$now=[DateTime]::UtcNow;if(Test-AtaraxiaGuiPollingIntervalElapsed $now $pollState.last_poll 2000){$pollState.last_poll=$now;Update-KoboldConnectionIndicator}}catch{Report-AtaraxiaGuiError $_ 'gui_timer_tick'}}.GetNewClosure()
     $script:uiTimer=Start-AtaraxiaGuiViewTimer $script:guiViewPort 250 $pollTick

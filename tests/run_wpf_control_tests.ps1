@@ -67,6 +67,12 @@ try{
     Set-AtaraxiaGuiViewItems $port 'theme_selector' $themeOptions;Set-AtaraxiaGuiViewItems $port 'model_selector' $modelOptions;Set-AtaraxiaGuiViewItems $port 'parameter_presets' $presetOptions
     Set-AtaraxiaGuiViewValue $port 'theme_selector' 'dark';Set-AtaraxiaGuiViewValue $port 'model_selector' 'models/Llama.gguf';Set-AtaraxiaGuiViewValue $port 'parameter_presets' 'creative'
     Assert-WpfControlTest ($themeSelector.SelectedItem.key -eq 'dark' -and $modelSelector.SelectedItem.name -eq 'Llama.gguf' -and $presetSelector.SelectedItem.name -eq 'Creative') 'Settings selectors did not apply their selected theme, model, and parameter preset through the view port.'
+    $savePresetButton=$window.FindName('SaveParameterPreset');$deletePresetButton=$window.FindName('DeleteParameterPreset')
+    $actionPort=New-AtaraxiaWpfGuiViewPort @{save_preset_enabled=$savePresetButton;delete_preset_enabled=$deletePresetButton;dispatcher=$window.Dispatcher} @{save_preset_enabled='IsEnabled';delete_preset_enabled='IsEnabled'} {param($Text)} ${function:Get-AtaraxiaGuiInputHeight}
+    Set-AtaraxiaGuiViewValue $actionPort 'save_preset_enabled' $false;Set-AtaraxiaGuiViewValue $actionPort 'delete_preset_enabled' $false
+    Assert-WpfControlTest (-not $savePresetButton.IsEnabled -and -not $deletePresetButton.IsEnabled -and -not $window.IsVisible) 'Built-in preset action values did not disable overwrite and delete on the unshown WPF controls.'
+    Set-AtaraxiaGuiViewValue $actionPort 'save_preset_enabled' $true;Set-AtaraxiaGuiViewValue $actionPort 'delete_preset_enabled' $true
+    Assert-WpfControlTest ($savePresetButton.IsEnabled -and $deletePresetButton.IsEnabled) 'User-owned preset action values did not enable overwrite and delete.'
     $longBody='Conversation content for scroll emulation. ' * 160
     $conversation=[pscustomobject]@{entries=@(
         [pscustomobject]@{body=$longBody;timestamp='2026-01-01T00:00:00Z'},
